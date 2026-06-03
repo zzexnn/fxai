@@ -10,6 +10,10 @@
  * @returns {string}
  */
 export function buildVariantSystemPrompt(skillData, errorReasons) {
+  const errorsStr = errorReasons && errorReasons.length > 0
+    ? errorReasons.map((r, i) => `${i + 1}. ${r}`).join('\n')
+    : '本次诊断无明显失分（学生答题表现优异），请生成一道同考点的巩固练习题。';
+
   return `# 角色
 你是一名初中语文命题助手。你需要根据给定的文章和考点，生成一道变式训练题，帮助学生克服特定的失分问题。
 
@@ -20,14 +24,14 @@ export function buildVariantSystemPrompt(skillData, errorReasons) {
 - 答题模板: ${skillData.answering_templates.join('\n  ')}
 
 # 学生的失分原因
-${errorReasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+${errorsStr}
 
 # 要求
 1. 变式题必须基于给定的文章内容出题，但不能与原题重复
-2. 变式题应针对学生的薄弱环节设计，让学生在练习中弥补失分点
+2. 变式题应针对学生的薄弱环节（如有）或考点核心设计，让学生在练习中弥补失分点或巩固能力
 3. 同时给出详细的参考答案，答案必须覆盖所有得分维度
 4. 参考答案需逐步展示答题思路，标注每个步骤对应哪个得分维度
-5. 给出"关注要点"提醒，帮助学生注意自己容易遗漏的部分
+5. 给出"关注要点"提醒，帮助学生注意自己容易遗漏或需要加深理解的部分
 
 # 约束
 - 题目难度与中考难度持平
@@ -66,6 +70,10 @@ ${originalQuestion}
  * @returns {string}
  */
 export function buildKnowledgeSystemPrompt(skillData, knowledgeGaps) {
+  const gapsStr = knowledgeGaps && knowledgeGaps.length > 0
+    ? knowledgeGaps.map((g, i) => `${i + 1}. ${g}`).join('\n')
+    : '本次诊断无明显知识盲区（学生答题表现优异），请生成一份通用拓展精讲与范例。';
+
   return `# 角色
 你是一名初中语文教学助手。你需要针对学生在特定考点上暴露的知识盲区，提供清晰的答题技巧讲解和完整的范例。
 
@@ -78,17 +86,17 @@ ${skillData.answering_methods.map(m => `  - ${m.name}: ${m.description}`).join('
 ${skillData.answering_templates.map(t => `  - ${t}`).join('\n')}
 
 # 学生的问题
-${knowledgeGaps.map((g, i) => `${i + 1}. ${g}`).join('\n')}
+${gapsStr}
 
 # 要求
 1. **技巧讲解**：用简明易懂的语言讲解该考点的答题技巧和方法
-   - 重点解释学生缺失的知识点
+   - 重点解释学生缺失的知识点（如有），无错因时讲解考点的通识技巧和高频考向
    - 使用"第一步…第二步…"的结构化讲解方式
    - 用通俗语言，避免过于学术化
 2. **完整范例**：提供一个典型的范例
    - 范例需包含：语境/背景文段 + 题目 + 标准答案
    - 标准答案需逐步展示答题思路
-   - 范例须能覆盖学生缺失的知识点
+   - 范例须能针对并覆盖学生缺失的知识点（无错因时提供该考点的典型答题示范）
 3. **易错提醒**：列出该考点常见的易错点
 
 # 约束

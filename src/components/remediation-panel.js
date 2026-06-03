@@ -4,7 +4,7 @@
  */
 
 import { escapeHtml } from '../utils/helpers.js';
-import { getQuestionType } from '../data/question-types.js';
+import { getQuestionType, QUESTION_TYPES } from '../data/question-types.js';
 import {
   buildVariantSystemPrompt,
   buildVariantUserContent,
@@ -14,6 +14,54 @@ import {
 import { generateVariant, generateKnowledge } from '../services/remediation.js';
 import { canUse, recordUsage, getRemaining, getLimit } from '../services/limits.js';
 import { Toast } from './toast.js';
+
+/**
+ * 模糊匹配考点数据
+ * 依次尝试：精确匹配 → 包含匹配 → 关键词匹配
+ * @param {string} questionType - 前端匹配的题型
+ * @param {string} aiType - AI 返回的题型名
+ * @returns {object|null}
+ */
+function findSkillData(questionType, aiType) {
+  // 1. 精确匹配 point_name
+  if (questionType) {
+    const exact = getQuestionType(questionType);
+    if (exact) return exact;
+  }
+  if (aiType) {
+    const exact = getQuestionType(aiType);
+    if (exact) return exact;
+  }
+
+  // 2. 包含匹配：point_name 包含 aiType 或反过来
+  const candidates = [questionType, aiType].filter(Boolean);
+  for (const name of candidates) {
+    const found = QUESTION_TYPES.find(t =>
+      t.point_name.includes(name) || name.includes(t.point_name)
+    );
+    if (found) return found;
+  }
+
+  // 3. 关键词匹配：拆分名称为关键词，匹配 point_name
+  for (const name of candidates) {
+    const keywords = name.replace(/[的与及和]/g, ' ').split(/\s+/).filter(s => s.length >= 2);
+    let bestMatch = null;
+    let bestScore = 0;
+    for (const t of QUESTION_TYPES) {
+      let score = 0;
+      for (const kw of keywords) {
+        if (t.point_name.includes(kw)) score++;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = t;
+      }
+    }
+    if (bestMatch && bestScore >= 1) return bestMatch;
+  }
+
+  return null;
+}
 
 /**
  * 从诊断结果中提取错因分类
@@ -75,81 +123,115 @@ function countErrorStudents(result) {
  */
 export function renderRemediationPanel(container, analysisRecord) {
   const { result, inputs, mode, questionType } = analysisRecord;
-  if (!result || !result.个体诊断) return;
+  if (!result || !result.个体诊断) {
+    console.log('[Remediation] No result or individual diagnosis found in record.');
+    return;
+  }
 
-  // 检查是否所有学生都无失分
-  const allPerfect = result.个体诊断.every(d => d.无失分);
-  if (allPerfect) return; // 无失分不需要补救
+  console.log('[Remediation] renderRemediationPanel inputs:', { questionType, aiType: result.题型 });
 
   const errors = classifyErrors(result);
   const errorCounts = countErrorStudents(result);
   const hasArticle = inputs?.article && inputs.article !== '未提供' && inputs.article.trim().length > 0;
-  const skillData = getQuestionType(questionType) || getQuestionType(result.题型);
 
-  // 如果没有匹配到考点，无法生成补救
-  if (!skillData) return;
+  // 尝试多种方式匹配考点数据
+  const skillData = findSkillData(questionType, result.题型);
+  console.log('[Remediation] findSkillData result:', skillData);
+
+  // 检查是否显示面板：
+  // 1. 存在失分点 (hasErrors)
+  // 2. 匹配到了考点知识 (skillData)，可供进行巩固拓展
+  const hasErrors = errors.technique.length > 0 || errors.knowledge.length > 0 || errors.attitude.length > 0;
+  if (!hasErrors && !skillData) {
+    console.log('[Remediation] Not rendering remediation panel because no errors found and no skill data matched.');
+    return;
+  }
 
   const panel = document.createElement('div');
   panel.className = 'remediation-panel animate-fade-in-up';
 
   let html = `
     <div class="remediation-panel__header">
-      <h3 class="remediation-panel__title">💡 补救建议</h3>
-      <p class="remediation-panel__desc">根据诊断结果，AI 建议以下补救方式。点击按钮生成对应材料。</p>
+      <h3 class="remediation-panel__title">💡 补救与拓展建议</h3>
+      <p class="remediation-panel__desc">根据诊断结果，AI 建议以下补救或巩固方案。点击按钮生成对应材料。</p>
     </div>
     <div class="remediation-panel__cards">
   `;
 
-  // 技巧规范 → 变式训练
-  if (errors.technique.length > 0) {
-    const errorTags = errors.technique.map(r => {
-      const count = errorCounts.get(r) || 0;
-      return `<span class="badge badge--warning">${escapeHtml(r)}${count > 0 ? `(${count}人)` : ''}</span>`;
-    }).join(' ');
+  // 1. 变式训练 / 巩固训练
+  const showVariantCard = errors.technique.length > 0 || (skillData && !hasErrors);
+  if (showVariantCard) {
+    const isRemedy = errors.technique.length > 0;
+    const title = isRemedy ? '变式训练 (纠错)' : '巩固训练 (防错)';
+    const desc = isRemedy 
+      ? '学生答题方向正确但技巧不规范。基于同一篇文章生成同考点练习题，强化薄弱环节。'
+      : '学生作答表现优异，可生成同考点巩固训练题，进一步加深理解。';
+    
+    let errorTags = '';
+    if (isRemedy) {
+      errorTags = errors.technique.map(r => {
+        const count = errorCounts.get(r) || 0;
+        return `<span class="badge badge--warning">${escapeHtml(r)}${count > 0 ? `(${count}人)` : ''}</span>`;
+      }).join(' ');
+    } else {
+      errorTags = `<span class="badge badge--success">考点: ${escapeHtml(skillData.point_name)}</span>`;
+    }
 
+    const variantDisabled = !hasArticle || !skillData;
+    const variantWarn = !hasArticle ? '⚠️ 未上传文章，无法生成变式题' : !skillData ? '⚠️ 未匹配到考点知识，无法生成变式题' : '';
     html += `
       <div class="remediation-card remediation-card--variant">
         <div class="remediation-card__icon">⚡</div>
         <div class="remediation-card__content">
-          <div class="remediation-card__title">变式训练</div>
-          <div class="remediation-card__desc">
-            学生答题方向正确但技巧不规范。基于同一篇文章生成同考点练习题，强化薄弱环节。
-          </div>
+          <div class="remediation-card__title">${title}</div>
+          <div class="remediation-card__desc">${desc}</div>
           <div class="remediation-card__errors">${errorTags}</div>
-          ${!hasArticle ? '<div class="remediation-card__warn">⚠️ 未上传文章，无法生成变式题</div>' : ''}
+          ${variantWarn ? `<div class="remediation-card__warn">${variantWarn}</div>` : ''}
         </div>
-        <button class="btn btn--accent btn--sm remediation-card__btn" id="gen-variant-btn" ${!hasArticle ? 'disabled' : ''}>
-          ✅ 生成变式题
+        <button class="btn btn--accent btn--sm remediation-card__btn" id="gen-variant-btn" ${variantDisabled ? 'disabled' : ''}>
+          ✅ ${isRemedy ? '生成变式题' : '生成巩固题'}
         </button>
       </div>
     `;
   }
 
-  // 知识盲区/审题问题 → 知识讲解
-  if (errors.knowledge.length > 0) {
-    const errorTags = errors.knowledge.map(r => {
-      const count = errorCounts.get(r) || 0;
-      return `<span class="badge badge--info">${escapeHtml(r)}${count > 0 ? `(${count}人)` : ''}</span>`;
-    }).join(' ');
+  // 2. 知识讲解 / 拓展提优
+  const showKnowledgeCard = errors.knowledge.length > 0 || (skillData && !hasErrors);
+  if (showKnowledgeCard) {
+    const isRemedy = errors.knowledge.length > 0;
+    const title = isRemedy ? '知识讲解 (补缺)' : '知识拓展 (提优)';
+    const desc = isRemedy
+      ? '学生存在概念不清或审题偏差。提供答题技巧讲解和标准范例，帮助学生建立正确认知。'
+      : '提供该考点的精讲内容、标准答题技巧与精选范例，用于教学分发或自主复习。';
+    
+    let errorTags = '';
+    if (isRemedy) {
+      errorTags = errors.knowledge.map(r => {
+        const count = errorCounts.get(r) || 0;
+        return `<span class="badge badge--info">${escapeHtml(r)}${count > 0 ? `(${count}人)` : ''}</span>`;
+      }).join(' ');
+    } else {
+      errorTags = `<span class="badge badge--success">考点: ${escapeHtml(skillData.point_name)}</span>`;
+    }
 
+    const knowledgeDisabled = !skillData;
     html += `
       <div class="remediation-card remediation-card--knowledge">
         <div class="remediation-card__icon">📖</div>
         <div class="remediation-card__content">
-          <div class="remediation-card__title">知识讲解</div>
-          <div class="remediation-card__desc">
-            学生存在概念不清或审题偏差。提供答题技巧讲解和标准范例，帮助学生建立正确认知。
-          </div>
+          <div class="remediation-card__title">${title}</div>
+          <div class="remediation-card__desc">${desc}</div>
           <div class="remediation-card__errors">${errorTags}</div>
+          ${knowledgeDisabled ? '<div class="remediation-card__warn">⚠️ 未匹配到考点知识，无法生成知识卡片</div>' : ''}
         </div>
-        <button class="btn btn--primary btn--sm remediation-card__btn" id="gen-knowledge-btn">
-          📖 生成知识卡片
+        <button class="btn btn--primary btn--sm remediation-card__btn" id="gen-knowledge-btn" ${knowledgeDisabled ? 'disabled' : ''}>
+          📖 ${isRemedy ? '生成知识卡片' : '生成拓展卡片'}
         </button>
       </div>
     `;
   }
 
-  // 习惯态度
+  // 3. 习惯态度
   if (errors.attitude.length > 0) {
     html += `
       <div class="remediation-card remediation-card--attitude">
@@ -194,7 +276,7 @@ export function renderRemediationPanel(container, analysisRecord) {
 
   // 生成知识卡片
   const knowledgeBtn = panel.querySelector('#gen-knowledge-btn');
-  if (knowledgeBtn) {
+  if (knowledgeBtn && !knowledgeBtn.disabled) {
     knowledgeBtn.addEventListener('click', () =>
       handleGenerateKnowledge(knowledgeBtn, resultArea, {
         skillData,
