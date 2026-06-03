@@ -42,6 +42,7 @@ export function showOcrPreview(ocrResults) {
     return ocrResults.map((item, index) => ({
       label: item.label,
       text: textareas[index] ? textareas[index].value.trim() : item.text,
+      field: item.field,
     }));
   });
 }
