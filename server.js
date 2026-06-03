@@ -157,13 +157,24 @@ app.get('/api/test/analyzer', async (_req, res) => {
   }
 });
 
-// ---- 生产模式下提供静态文件 ----
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(resolve(__dirname, 'dist')));
-  app.get('*', (_req, res) => {
-    res.sendFile(resolve(__dirname, 'dist', 'index.html'));
-  });
-}
+// ---- 提供静态文件（支持子路径部署） ----
+const BASE_PATH = process.env.BASE_PATH || '/yzk';
+
+// 挂载静态文件到子路径（如 /yzk/assets/... → dist/assets/...）
+app.use(BASE_PATH, express.static(resolve(__dirname, 'dist')));
+
+// SPA fallback：所有子路径请求都返回 index.html
+app.get(`${BASE_PATH}/*`, (_req, res) => {
+  res.sendFile(resolve(__dirname, 'dist', 'index.html'));
+});
+
+// 同时也挂载到根路径（兼容 nginx 已剥离前缀的情况）
+app.use(express.static(resolve(__dirname, 'dist')));
+app.get('*', (_req, res, next) => {
+  // 避免 API 路由被拦截
+  if (_req.path.startsWith('/api/')) return next();
+  res.sendFile(resolve(__dirname, 'dist', 'index.html'));
+});
 
 app.listen(PORT, () => {
   console.log(`✅ 后端服务启动于 http://localhost:${PORT}`);
