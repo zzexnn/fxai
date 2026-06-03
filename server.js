@@ -177,9 +177,8 @@ const distPath = resolve(__dirname, 'dist');
 
 app.use(express.static(distPath));
 
-// SPA fallback：非 API 的所有 GET 请求都返回 index.html
-app.get('*', (req, res) => {
-  // 已经被上面的 API 路由处理的不会到这里
+// SPA fallback：非 API 的所有 GET 请求都返回 index.html（用正则兼容 Express 5）
+app.get(/^(?!\/api\/).*$/, (req, res) => {
   res.sendFile(resolve(distPath, 'index.html'));
 });
 
