@@ -97,7 +97,7 @@ app.post('/api/analyze', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_KEY}`,
-        'X-Title': '阅读诊断助手',
+        'X-Title': 'ReadingDiagnosis',
       },
       body: JSON.stringify({ model, messages, temperature }),
     });
