@@ -3,7 +3,7 @@
  * 通过后端代理调用百炼 qwen3-vl API
  */
 
-import { readFileAsDataURL } from '../utils/helpers.js';
+import { readFileAsDataURL, compressImage } from '../utils/helpers.js';
 
 const OCR_ENDPOINT = '/api/ocr';
 
@@ -28,30 +28,47 @@ async function ocrSingleImage(dataURL) {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `OCR 请求失败: ${res.status}`);
+    const errBody = await res.text().catch(() => '');
+    let errMsg = `OCR 请求失败: ${res.status}`;
+    try {
+      const errJson = JSON.parse(errBody);
+      errMsg = errJson.error || errMsg;
+    } catch {
+      if (errBody) errMsg += ` - ${errBody.slice(0, 200)}`;
+    }
+    throw new Error(errMsg);
   }
 
   const data = await res.json();
+
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error('OCR 返回数据格式异常');
+  }
+
   return data.choices[0].message.content;
 }
 
 /**
  * 对多张图片批量 OCR（并行调用）
+ * 发送前自动压缩图片到 2MB 以内
  * @param {File[]} files - 图片文件数组
- * @returns {Promise<string[]>} 每张图片识别的文字数组
+ * @returns {Promise<string[]>} 每张图片识别的文字数组，失败的包含错误信息
  */
 export async function recognizeImages(files) {
   const results = await Promise.allSettled(
     files.map(async (file) => {
-      const dataURL = await readFileAsDataURL(file);
+      // 先压缩图片，减少传输体积
+      const compressed = await compressImage(file, 2);
+      const dataURL = await readFileAsDataURL(compressed);
       return ocrSingleImage(dataURL);
     })
   );
 
-  return results.map((r) =>
-    r.status === 'fulfilled' ? r.value : '[识别失败]'
-  );
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    console.error(`图片 ${i + 1} OCR 失败:`, r.reason);
+    return `[识别失败: ${r.reason?.message || '未知错误'}]`;
+  });
 }
 
 /**
