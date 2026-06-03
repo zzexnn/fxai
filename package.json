@@ -1,0 +1,21 @@
+{
+  "name": "fxai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "初中语文阅读题答案分析工具",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"node server.js\"",
+    "dev:frontend": "vite",
+    "dev:server": "node server.js",
+    "build": "vite build",
+    "start": "NODE_ENV=production node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "vite": "^6.3.0"
+  }
+}
