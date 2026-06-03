@@ -158,7 +158,7 @@ app.get('/api/test/analyzer', async (_req, res) => {
 });
 
 // ---- 提供静态文件（支持子路径部署） ----
-const BASE_PATH = process.env.BASE_PATH || '/yzk';
+const BASE_PATH = process.env.BASE_PATH || '/fxai';
 
 // 挂载静态文件到子路径（如 /yzk/assets/... → dist/assets/...）
 app.use(BASE_PATH, express.static(resolve(__dirname, 'dist')));
