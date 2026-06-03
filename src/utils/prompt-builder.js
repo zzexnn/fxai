@@ -1,6 +1,7 @@
 /**
  * Prompt 构建器
  * 包含完整的固定系统 Prompt 模板，以及用户消息拼装函数
+ * 适配 readskills.json 数据结构
  */
 
 const SYSTEM_PROMPT_TEMPLATE = `# 角色
@@ -93,14 +94,52 @@ const SYSTEM_PROMPT_TEMPLATE = `# 角色
 }`;
 
 /**
+ * 将 readskills.json 的考点数据转换为注入 Prompt 的知识文本
+ * @param {object} skillData - readskills.json 中的一个考点对象
+ * @returns {string}
+ */
+function formatSkillKnowledge(skillData) {
+  const parts = [];
+
+  parts.push(`考点名称: ${skillData.point_name}`);
+  parts.push(`文体: ${skillData.genre}`);
+
+  // 答题方法 → 得分要点
+  if (skillData.answering_methods && skillData.answering_methods.length > 0) {
+    parts.push('\n答题方法（得分要点）:');
+    skillData.answering_methods.forEach((m, i) => {
+      parts.push(`  ${i + 1}. ${m.name}: ${m.description}`);
+    });
+  }
+
+  // 答题模板
+  if (skillData.answering_templates && skillData.answering_templates.length > 0) {
+    parts.push('\n答题模板:');
+    skillData.answering_templates.forEach(t => {
+      parts.push(`  ${t}`);
+    });
+  }
+
+  // 失分原因 → 专属错因
+  if (skillData.score_loss_reasons && skillData.score_loss_reasons.length > 0) {
+    parts.push('\n专属错因:');
+    skillData.score_loss_reasons.forEach((r, i) => {
+      parts.push(`  ${i + 1}. [${r.category}] ${r.reason}`);
+    });
+  }
+
+  return parts.join('\n');
+}
+
+/**
  * 构建系统提示词
- * 将题型知识注入到模板中的 {{题型知识}} 占位符
- * @param {object|null} questionTypeKnowledge - 题型知识 JSON 对象
+ * 将考点知识注入到模板中的 {{题型知识}} 占位符
+ * @param {object|null} questionTypeKnowledge - readskills.json 中的考点对象
  * @returns {string} 完整的 system prompt
  */
 export function buildSystemPrompt(questionTypeKnowledge) {
   const knowledgeStr = questionTypeKnowledge
-    ? JSON.stringify(questionTypeKnowledge, null, 2)
+    ? formatSkillKnowledge(questionTypeKnowledge)
     : '未匹配到已收录题型，请使用通用错因大类进行粗诊断。';
 
   return SYSTEM_PROMPT_TEMPLATE.replace('{{题型知识}}', knowledgeStr);

@@ -5,6 +5,7 @@
 
 import { escapeHtml } from '../utils/helpers.js';
 import { exportAsPrint, exportAsJSON } from '../utils/export.js';
+import { renderRemediationPanel } from './remediation-panel.js';
 
 /**
  * 渲染分析结果
@@ -59,6 +60,9 @@ export function renderResults(container, analysisRecord) {
   }
 
   container.appendChild(section);
+
+  // 渲染补救建议面板（在诊断结果之后）
+  renderRemediationPanel(container, analysisRecord);
 
   // 绑定导出事件
   section.querySelector('#export-print-btn')?.addEventListener('click', () => exportAsPrint(analysisRecord));
@@ -150,6 +154,8 @@ function createSummaryTable(summary) {
 export function clearResults(container) {
   const existing = container.querySelector('.result-section');
   if (existing) existing.remove();
+  const remediation = container.querySelector('.remediation-panel');
+  if (remediation) remediation.remove();
 }
 
 function getConfBadgeClass(conf) {

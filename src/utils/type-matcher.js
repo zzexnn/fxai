@@ -1,58 +1,59 @@
 /**
  * 题型自动匹配器
- * 根据题目文本中的关键词命中情况，匹配最可能的题型
+ * 根据题目文本与 testing_methods 的相似度匹配最可能的考点
  */
 
 import { QUESTION_TYPES } from '../data/question-types.js';
 
 /**
- * 从识别前提中提取用于匹配的关键词
- * 将前提描述拆分为可检索的短语
- * @param {string} premise - 识别前提文本
+ * 从 testing_methods 中提取用于匹配的关键词片段
+ * @param {string[]} methods - 考法列表
+ * @returns {string[]} 提取的关键词
+ */
+function extractKeywords(methods) {
+  if (!methods || methods.length === 0) return [];
+
+  const keywords = new Set();
+
+  for (const method of methods) {
+    // 提取中文关键词片段（2-6字）
+    // 去除模板占位符（×、……、/等）
+    const cleaned = method.replace(/[×…/\\《》""（）()，。？?、\s]+/g, ' ');
+    const segments = cleaned.split(' ').filter(s => s.length >= 2 && s.length <= 8);
+    segments.forEach(s => keywords.add(s));
+  }
+
+  return [...keywords];
+}
+
+/**
+ * 从考点名称中提取核心词
+ * @param {string} pointName
  * @returns {string[]}
  */
-function extractPremiseKeywords(premise) {
-  if (!premise) return [];
-  // 提取前提中有意义的短词/短语，用于在题目文本中检索
-  // 去除常见的修饰词和连接词
-  const stopWords = ['要求', '否则', '不属于', '此题型', '必须', '出现', '题中'];
-  // 按标点和空格拆分
-  const segments = premise.split(/[,，。、/()（）]/);
-  const keywords = [];
-  for (const seg of segments) {
-    const trimmed = seg.trim();
-    if (trimmed.length >= 2 && !stopWords.some(sw => trimmed === sw)) {
-      keywords.push(trimmed);
-    }
-  }
-  return keywords;
+function extractNameKeywords(pointName) {
+  if (!pointName) return [];
+  // 考点名称本身就是高权重关键词
+  // 拆分为2-4字的片段
+  const results = [pointName];
+  const parts = pointName.split(/[的与及和]/);
+  parts.forEach(p => {
+    const trimmed = p.trim();
+    if (trimmed.length >= 2) results.push(trimmed);
+  });
+  return results;
 }
 
 /**
- * 检查识别前提是否被满足
- * @param {string} premise - 识别前提
- * @param {string} text - 题目文本
- * @returns {boolean}
- */
-function checkPremise(premise, text) {
-  if (!premise) return true;
-  const keywords = extractPremiseKeywords(premise);
-  if (keywords.length === 0) return true;
-  // 前提关键词中至少有一个在文本中出现
-  return keywords.some(kw => text.includes(kw));
-}
-
-/**
- * 匹配题目文本对应的题型
+ * 匹配题目文本对应的考点
  *
  * 逻辑：
- * 1. 每个题型统计「识别关键词」在 questionText 中的命中数作为 score
- * 2. 如果「识别前提」中的关键词也命中，score += 2（加权）
+ * 1. 每个考点：从 point_name 提取核心词（权重 3）+ 从 testing_methods 提取关键词（权重 1）
+ * 2. 统计题目文本的关键词命中数作为 score
  * 3. 按 score 降序排列
- * 4. 最高分且满足前提 → confidence: 'high'
- * 5. 最高分但不满足前提 → confidence: 'medium'
- * 6. 最高分有多个并列 → confidence: 'low'
- * 7. 所有 score === 0 → confidence: 'none', type: null
+ * 4. 唯一最高分 → confidence: 'high'
+ * 5. 多个并列最高分 → confidence: 'low'
+ * 6. 所有 score === 0 → confidence: 'none', type: null
  *
  * @param {string} questionText - 题目文本
  * @returns {{ type: string|null, confidence: 'high'|'medium'|'low'|'none', candidates: Array<{type: string, score: number}> }}
@@ -68,35 +69,34 @@ export function matchQuestionType(questionText) {
   for (const qt of QUESTION_TYPES) {
     let score = 0;
 
-    // 统计识别关键词命中数
-    for (const keyword of qt.识别关键词) {
-      if (text.includes(keyword)) {
+    // 考点名称关键词（高权重）
+    const nameKws = extractNameKeywords(qt.point_name);
+    for (const kw of nameKws) {
+      if (text.includes(kw)) {
+        score += 3;
+      }
+    }
+
+    // testing_methods 关键词（标准权重）
+    const methodKws = extractKeywords(qt.testing_methods);
+    for (const kw of methodKws) {
+      if (text.includes(kw)) {
         score += 1;
       }
     }
 
-    // 检查识别前提是否满足，满足则加权
-    const premiseMet = checkPremise(qt.识别前提, text);
-    if (premiseMet && score > 0) {
-      score += 2;
-    }
-
     candidates.push({
-      type: qt.题型,
+      type: qt.point_name,
       score,
-      premiseMet,
     });
   }
 
   // 按 score 降序排列
   candidates.sort((a, b) => b.score - a.score);
 
-  // 构建返回结果（不暴露 premiseMet 内部字段到外部）
-  const resultCandidates = candidates.map(({ type, score }) => ({ type, score }));
-
   // 所有 score 都是 0
   if (candidates[0].score === 0) {
-    return { type: null, confidence: 'none', candidates: resultCandidates };
+    return { type: null, confidence: 'none', candidates };
   }
 
   const topScore = candidates[0].score;
@@ -107,17 +107,17 @@ export function matchQuestionType(questionText) {
     return {
       type: topCandidates[0].type,
       confidence: 'low',
-      candidates: resultCandidates,
+      candidates,
     };
   }
 
   // 唯一最高分
-  const best = topCandidates[0];
-  const confidence = best.premiseMet ? 'high' : 'medium';
+  // 分数足够高 → high，否则 → medium
+  const confidence = topScore >= 4 ? 'high' : 'medium';
 
   return {
-    type: best.type,
+    type: topCandidates[0].type,
     confidence,
-    candidates: resultCandidates,
+    candidates,
   };
 }
