@@ -3,7 +3,7 @@
  * 通过后端代理调用 OpenRouter API
  */
 
-const ANALYZE_ENDPOINT = '/api/analyze';
+const ANALYZE_ENDPOINT = `${import.meta.env.BASE_URL}api/analyze`.replace(/\/+$/, '');
 
 const MODELS = {
   deep: 'anthropic/claude-sonnet-4.6',
@@ -100,7 +100,7 @@ export async function analyzeAnswers({ systemPrompt, userContent, mode }) {
  */
 export async function testAnalyzerConnection() {
   try {
-    const res = await fetch('/api/test/analyzer');
+    const res = await fetch(`${import.meta.env.BASE_URL}api/test/analyzer`.replace(/\/+$/, ''));
     return await res.json();
   } catch (err) {
     return { success: false, message: `连接错误: ${err.message}` };

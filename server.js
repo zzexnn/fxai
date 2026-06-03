@@ -1,10 +1,10 @@
 /**
  * 后端 API 代理服务器
  * 持有 API Key，转发前端请求到百炼和 OpenRouter
+ * 生产模式下同时提供静态文件服务
  */
 
 import express from 'express';
-import { createRequire } from 'module';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -34,11 +34,24 @@ loadEnv();
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+// 允许跨域（开发时 Vite 在不同端口）
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (_req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 const PORT = process.env.PORT || 3001;
 const DASHSCOPE_KEY = process.env.DASHSCOPE_API_KEY || '';
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '';
 const DASHSCOPE_ENDPOINT = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+
+// ==========================================
+// API 路由（必须在静态文件之前）
+// ==========================================
 
 // ---- OCR 接口 ----
 app.post('/api/ocr', async (req, res) => {
@@ -157,27 +170,21 @@ app.get('/api/test/analyzer', async (_req, res) => {
   }
 });
 
-// ---- 提供静态文件（支持子路径部署） ----
-const BASE_PATH = process.env.BASE_PATH || '/fxai';
+// ==========================================
+// 静态文件服务（API 路由之后）
+// ==========================================
+const distPath = resolve(__dirname, 'dist');
 
-// 挂载静态文件到子路径（如 /fxai/assets/... → dist/assets/...）
-app.use(BASE_PATH, express.static(resolve(__dirname, 'dist')));
+app.use(express.static(distPath));
 
-// SPA fallback：所有子路径请求都返回 index.html（Express 5 语法）
-app.get(`${BASE_PATH}{/*path}`, (_req, res) => {
-  res.sendFile(resolve(__dirname, 'dist', 'index.html'));
-});
-
-// 同时也挂载到根路径（兼容 nginx 已剥离前缀的情况）
-app.use(express.static(resolve(__dirname, 'dist')));
-app.get('{/*path}', (_req, res, next) => {
-  // 避免 API 路由被拦截
-  if (_req.path.startsWith('/api/')) return next();
-  res.sendFile(resolve(__dirname, 'dist', 'index.html'));
+// SPA fallback：非 API 的所有 GET 请求都返回 index.html
+app.get('*', (req, res) => {
+  // 已经被上面的 API 路由处理的不会到这里
+  res.sendFile(resolve(distPath, 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ 后端服务启动于 http://localhost:${PORT}`);
+  console.log(`✅ 服务启动于 http://localhost:${PORT}`);
   console.log(`   百炼 API Key: ${DASHSCOPE_KEY ? '已配置 ✓' : '未配置 ✗'}`);
   console.log(`   OpenRouter Key: ${OPENROUTER_KEY ? '已配置 ✓' : '未配置 ✗'}`);
 });

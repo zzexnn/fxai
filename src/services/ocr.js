@@ -5,7 +5,7 @@
 
 import { readFileAsDataURL, compressImage } from '../utils/helpers.js';
 
-const OCR_ENDPOINT = '/api/ocr';
+const OCR_ENDPOINT = `${import.meta.env.BASE_URL}api/ocr`.replace(/\/+$/, '');
 
 /**
  * 对单张图片进行 OCR 识别
@@ -77,7 +77,7 @@ export async function recognizeImages(files) {
  */
 export async function testOcrConnection() {
   try {
-    const res = await fetch('/api/test/ocr');
+    const res = await fetch(`${import.meta.env.BASE_URL}api/test/ocr`.replace(/\/+$/, ''));
     return await res.json();
   } catch (err) {
     return { success: false, message: `连接错误: ${err.message}` };
