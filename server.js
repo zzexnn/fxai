@@ -160,17 +160,17 @@ app.get('/api/test/analyzer', async (_req, res) => {
 // ---- 提供静态文件（支持子路径部署） ----
 const BASE_PATH = process.env.BASE_PATH || '/fxai';
 
-// 挂载静态文件到子路径（如 /yzk/assets/... → dist/assets/...）
+// 挂载静态文件到子路径（如 /fxai/assets/... → dist/assets/...）
 app.use(BASE_PATH, express.static(resolve(__dirname, 'dist')));
 
-// SPA fallback：所有子路径请求都返回 index.html
-app.get(`${BASE_PATH}/*`, (_req, res) => {
+// SPA fallback：所有子路径请求都返回 index.html（Express 5 语法）
+app.get(`${BASE_PATH}/:path(.*)`, (_req, res) => {
   res.sendFile(resolve(__dirname, 'dist', 'index.html'));
 });
 
 // 同时也挂载到根路径（兼容 nginx 已剥离前缀的情况）
 app.use(express.static(resolve(__dirname, 'dist')));
-app.get('*', (_req, res, next) => {
+app.get('/:path(.*)', (_req, res, next) => {
   // 避免 API 路由被拦截
   if (_req.path.startsWith('/api/')) return next();
   res.sendFile(resolve(__dirname, 'dist', 'index.html'));
