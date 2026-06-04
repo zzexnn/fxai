@@ -17,11 +17,14 @@ import { analyzeAnswers } from '../services/analyzer.js';
 import { addHistory } from '../services/storage.js';
 import { canUse, getRemaining, getLimit, recordUsage } from '../services/limits.js';
 
+let lastRecord = null;
+
 /**
  * 渲染分析页面
  * @param {HTMLElement} container
  */
 export function renderAnalysisPage(container) {
+  lastRecord = null;
   container.innerHTML = '';
 
   // 页面标题
@@ -133,6 +136,19 @@ export function renderAnalysisPage(container) {
   // 开始分析
   const submitBtn = actions.querySelector('#submit-btn');
   submitBtn.addEventListener('click', () => handleSubmit(selectedMode, resultContainer, submitBtn));
+
+  // 监听题型切换，动态响应并免除诊断刷新补救面板
+  const typeSelect = typeSelectorContainer.querySelector('#type-select');
+  if (typeSelect) {
+    typeSelect.addEventListener('change', () => {
+      if (lastRecord) {
+        const resolvedType = getResolvedType();
+        console.log('[Analysis] Dropdown changed, dynamic matching to:', resolvedType);
+        lastRecord.questionType = resolvedType || lastRecord.result.题型 || '未知';
+        renderResults(resultContainer, lastRecord);
+      }
+    });
+  }
 }
 
 /**
@@ -274,6 +290,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
 
     // 显示结果
     renderResults(resultContainer, record);
+    lastRecord = record;
 
     // 保存历史
     addHistory(record);

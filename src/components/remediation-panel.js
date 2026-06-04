@@ -33,31 +33,68 @@ function findSkillData(questionType, aiType) {
     if (exact) return exact;
   }
 
-  // 2. 包含匹配：point_name 包含 aiType 或反过来
+  // 2. 清洗后缀并做二字词 (Bigram) 拆分模糊匹配
   const candidates = [questionType, aiType].filter(Boolean);
-  for (const name of candidates) {
-    const found = QUESTION_TYPES.find(t =>
-      t.point_name.includes(name) || name.includes(t.point_name)
-    );
-    if (found) return found;
-  }
 
-  // 3. 关键词匹配：拆分名称为关键词，匹配 point_name
-  for (const name of candidates) {
-    const keywords = name.replace(/[的与及和]/g, ' ').split(/\s+/).filter(s => s.length >= 2);
-    let bestMatch = null;
-    let bestScore = 0;
-    for (const t of QUESTION_TYPES) {
-      let score = 0;
-      for (const kw of keywords) {
-        if (t.point_name.includes(kw)) score++;
+  const getBigrams = (str) => {
+    if (!str) return [];
+    // 清洗无意义的后缀以提高核心词重合率
+    let cleaned = str.replace(/(题型|考点|分析|问题|的大类|的细类|题)$/g, '');
+    const bigrams = [];
+    for (let i = 0; i < cleaned.length - 1; i++) {
+      const pair = cleaned.slice(i, i + 2);
+      // 确保是中文字符
+      if (/^[\u4e00-\u9fa5]{2}$/.test(pair)) {
+        bigrams.push(pair);
       }
-      if (score > bestScore) {
-        bestScore = score;
+    }
+    // 如果太短（如只有一个汉字），降级为单字匹配
+    if (bigrams.length === 0 && cleaned.length > 0) {
+      for (let i = 0; i < cleaned.length; i++) {
+        if (/^[\u4e00-\u9fa5]$/.test(cleaned[i])) {
+          bigrams.push(cleaned[i]);
+        }
+      }
+    }
+    return bigrams;
+  };
+
+  let bestMatch = null;
+  let maxScore = 0;
+
+  for (const name of candidates) {
+    const inputBigrams = getBigrams(name);
+    if (inputBigrams.length === 0) continue;
+
+    for (const t of QUESTION_TYPES) {
+      const targetBigrams = getBigrams(t.point_name);
+      let score = 0;
+
+      // 统计交集中的二字词命中数
+      for (const bg of inputBigrams) {
+        if (targetBigrams.includes(bg) || t.point_name.includes(bg)) {
+          score++;
+        }
+      }
+
+      // 如果存在去除后缀后的直接包含关系，给予权重加分
+      const nameCleaned = name.replace(/(题型|考点|分析|问题|的大类|的细类|题)$/g, '');
+      const targetCleaned = t.point_name.replace(/(题型|考点|分析|问题|的大类|的细类|题)$/g, '');
+      if (targetCleaned.includes(nameCleaned) || nameCleaned.includes(targetCleaned)) {
+        score += 2;
+      }
+
+      if (score > maxScore) {
+        maxScore = score;
         bestMatch = t;
       }
     }
-    if (bestMatch && bestScore >= 1) return bestMatch;
+  }
+
+  // 设定匹配阈值：得分大于等于 1
+  if (bestMatch && maxScore >= 1) {
+    console.log(`[Remediation] Fuzzy matched ${JSON.stringify(candidates)} to "${bestMatch.point_name}" with score ${maxScore}`);
+    return bestMatch;
   }
 
   return null;
