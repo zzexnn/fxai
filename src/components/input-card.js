@@ -46,11 +46,18 @@ export function createInputCard({ id, title, icon, required = false, placeholder
         <textarea class="form-input form-textarea" id="${id}-textarea" placeholder="${placeholder}"></textarea>
       </div>
       <div id="${id}-image-panel" style="display:none;">
-        <div class="upload-zone" id="${id}-upload-zone">
-          <div class="upload-zone__icon">📷</div>
-          <div class="upload-zone__text">拖拽图片到此处，或点击选择</div>
+        <div style="display:flex; gap:var(--space-3); margin-bottom:var(--space-3);">
+          <div class="upload-zone" id="${id}-upload-zone" style="flex:1; padding:var(--space-4) var(--space-2);">
+            <div class="upload-zone__icon">🖼️</div>
+            <div class="upload-zone__text" style="font-size:var(--text-xs); margin-top:var(--space-1);">选择相册照片</div>
+          </div>
+          <div class="upload-zone" id="${id}-camera-zone" style="flex:1; padding:var(--space-4) var(--space-2);">
+            <div class="upload-zone__icon">📷</div>
+            <div class="upload-zone__text" style="font-size:var(--text-xs); margin-top:var(--space-1);">直接拍照上传</div>
+          </div>
         </div>
         <input type="file" id="${id}-file-input" accept="image/*" multiple style="display:none;" />
+        <input type="file" id="${id}-camera-input" accept="image/*" capture="environment" style="display:none;" />
         <div class="image-grid" id="${id}-image-grid"></div>
       </div>
     </div>
@@ -61,7 +68,9 @@ export function createInputCard({ id, title, icon, required = false, placeholder
   const textPanel = card.querySelector(`#${id}-text-panel`);
   const imagePanel = card.querySelector(`#${id}-image-panel`);
   const uploadZone = card.querySelector(`#${id}-upload-zone`);
+  const cameraZone = card.querySelector(`#${id}-camera-zone`);
   const fileInput = card.querySelector(`#${id}-file-input`);
+  const cameraInput = card.querySelector(`#${id}-camera-input`);
   const imageGrid = card.querySelector(`#${id}-image-grid`);
 
   // Tab 切换
@@ -84,8 +93,9 @@ export function createInputCard({ id, title, icon, required = false, placeholder
     });
   });
 
-  // 点击上传区域触发文件选择
+  // 点击上传区域触发文件选择 / 拍照选择
   uploadZone.addEventListener('click', () => fileInput.click());
+  cameraZone.addEventListener('click', () => cameraInput.click());
 
   // 拖拽上传
   uploadZone.addEventListener('dragover', (e) => {
@@ -107,6 +117,13 @@ export function createInputCard({ id, title, icon, required = false, placeholder
     const files = Array.from(fileInput.files);
     if (files.length > 0) addImages(id, files, imageGrid);
     fileInput.value = '';
+  });
+
+  // 拍照选择
+  cameraInput.addEventListener('change', () => {
+    const files = Array.from(cameraInput.files);
+    if (files.length > 0) addImages(id, files, imageGrid);
+    cameraInput.value = '';
   });
 
   // 图片网格事件委托（删除按钮）

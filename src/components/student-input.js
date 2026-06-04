@@ -73,11 +73,18 @@ function addEntry(listEl) {
       <textarea class="form-input form-textarea" id="${entryId}-textarea" placeholder="粘贴该生作答内容..." style="min-height:80px;"></textarea>
     </div>
     <div id="${entryId}-image-panel" style="display:none;">
-      <div class="upload-zone" id="${entryId}-upload-zone" style="padding:var(--space-6) var(--space-4);">
-        <div class="upload-zone__icon">📷</div>
-        <div class="upload-zone__text">拖拽图片到此处，或点击选择</div>
+      <div style="display:flex; gap:var(--space-3); margin-bottom:var(--space-3);">
+        <div class="upload-zone" id="${entryId}-upload-zone" style="flex:1; padding:var(--space-4) var(--space-2);">
+          <div class="upload-zone__icon">🖼️</div>
+          <div class="upload-zone__text" style="font-size:var(--text-xs); margin-top:var(--space-1);">选择相册照片</div>
+        </div>
+        <div class="upload-zone" id="${entryId}-camera-zone" style="flex:1; padding:var(--space-4) var(--space-2);">
+          <div class="upload-zone__icon">📷</div>
+          <div class="upload-zone__text" style="font-size:var(--text-xs); margin-top:var(--space-1);">直接拍照上传</div>
+        </div>
       </div>
       <input type="file" id="${entryId}-file-input" accept="image/*" multiple style="display:none;" />
+      <input type="file" id="${entryId}-camera-input" accept="image/*" capture="environment" style="display:none;" />
       <div class="image-grid" id="${entryId}-image-grid"></div>
     </div>
   `;
@@ -107,10 +114,15 @@ function bindEntryEvents(entryEl, entry) {
 
   // 上传区域
   const uploadZone = entryEl.querySelector(`#${id}-upload-zone`);
+  const cameraZone = entryEl.querySelector(`#${id}-camera-zone`);
   const fileInput = entryEl.querySelector(`#${id}-file-input`);
+  const cameraInput = entryEl.querySelector(`#${id}-camera-input`);
   const imageGrid = entryEl.querySelector(`#${id}-image-grid`);
 
+  // 点击上传区域触发文件选择 / 拍照选择
   uploadZone.addEventListener('click', () => fileInput.click());
+  cameraZone.addEventListener('click', () => cameraInput.click());
+
   uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('upload-zone--dragover'); });
   uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('upload-zone--dragover'));
   uploadZone.addEventListener('drop', e => {
@@ -120,10 +132,18 @@ function bindEntryEvents(entryEl, entry) {
     if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
   });
 
+  // 文件选择
   fileInput.addEventListener('change', () => {
     const files = Array.from(fileInput.files);
     if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
     fileInput.value = '';
+  });
+
+  // 拍照选择
+  cameraInput.addEventListener('change', () => {
+    const files = Array.from(cameraInput.files);
+    if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
+    cameraInput.value = '';
   });
 
   imageGrid.addEventListener('click', e => {

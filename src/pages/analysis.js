@@ -44,7 +44,7 @@ export function renderAnalysisPage(container) {
 
   const articleCard = createInputCard({ id: 'article', title: '文章', icon: '📄', required: false, placeholder: '粘贴文章原文...' });
   const questionCard = createInputCard({ id: 'question', title: '题目', icon: '📝', required: true, placeholder: '粘贴题目内容...' });
-  const referenceCard = createInputCard({ id: 'reference', title: '参考答案', icon: '✅', required: false, placeholder: '粘贴参考答案...' });
+  const referenceCard = createInputCard({ id: 'reference', title: '参考答案', icon: '✅', required: true, placeholder: '粘贴参考答案...' });
 
   // 学生回答区域包装为卡片样式
   const studentWrapper = document.createElement('div');
@@ -158,12 +158,18 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
   // 1. 校验必填
   const questionData = getInputCardData('question');
   const studentData = getStudentInputData();
+  const referenceData = getInputCardData('reference');
 
   const hasQuestion = questionData.mode === 'text' ? questionData.text.length > 0 : questionData.images.length > 0;
   const hasStudent = studentData.some(s => s.mode === 'text' ? s.text.length > 0 : s.images.length > 0);
+  const hasReference = referenceData.mode === 'text' ? referenceData.text.length > 0 : referenceData.images.length > 0;
 
   if (!hasQuestion) {
     Toast.show('请输入题目内容或上传题目图片', 'warning');
+    return;
+  }
+  if (!hasReference) {
+    Toast.show('请输入参考答案或上传参考答案图片', 'warning');
     return;
   }
   if (!hasStudent) {
@@ -179,7 +185,6 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
 
   // 4. 收集所有输入
   const articleData = getInputCardData('article');
-  const referenceData = getInputCardData('reference');
 
   // 5. 处理图片 OCR
   setLoading(submitBtn, true);

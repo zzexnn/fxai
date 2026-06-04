@@ -20,6 +20,7 @@ export function buildVariantSystemPrompt(skillData, errorReasons) {
 # 考点信息
 - 考点名称: ${skillData.point_name}
 - 文体: ${skillData.genre}
+- 评分维度分类: ${skillData.scoring_points ? skillData.scoring_points.join(', ') : '无'}
 - 答题方法: ${skillData.answering_methods.map(m => m.name + ': ' + m.description).join('\n  ')}
 - 答题模板: ${skillData.answering_templates.join('\n  ')}
 
@@ -75,11 +76,13 @@ export function buildKnowledgeSystemPrompt(skillData, knowledgeGaps) {
     : '本次诊断无明显知识盲区（学生答题表现优异），请生成一份通用拓展精讲与范例。';
 
   return `# 角色
-你是一名初中语文教学助手。你需要针对学生在特定考点上暴露的知识盲区，提供清晰的答题技巧讲解和完整的范例。
+你是一名初中语文教学助手。你需要针对 student 在特定考点上暴露的知识盲区，提供清晰的答题技巧讲解和完整的范例。
 
 # 考点信息
 - 考点名称: ${skillData.point_name}
 - 文体: ${skillData.genre}
+- 评分维度分类:
+${skillData.scoring_points ? skillData.scoring_points.map(p => `  - ${p}`).join('\n') : '  - 无'}
 - 答题方法:
 ${skillData.answering_methods.map(m => `  - ${m.name}: ${m.description}`).join('\n')}
 - 答题模板:
