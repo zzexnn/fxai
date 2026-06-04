@@ -3,7 +3,7 @@
  * 复用 /api/analyze 后端接口，只是 Prompt 不同
  */
 
-const ANALYZE_ENDPOINT = '/api/analyze';
+const ANALYZE_ENDPOINT = `${import.meta.env.BASE_URL}api/analyze`.replace(/\/+$/, '');
 
 const MODELS = {
   deep: 'anthropic/claude-sonnet-4.6',
