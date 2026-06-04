@@ -5,6 +5,7 @@
 import { renderAnalysisPage } from './pages/analysis.js';
 import { renderHistoryPage } from './pages/history.js';
 import { renderSettingsPage } from './pages/settings.js';
+import { renderAdminPage } from './pages/admin.js';
 import { getRemaining, getLimit } from './services/limits.js';
 import { getDeviceFingerprint } from './services/fingerprint.js';
 import { trackPV } from './utils/telemetry.js';
@@ -13,6 +14,7 @@ const routes = {
   '#analysis': { render: renderAnalysisPage, label: '答案诊断', icon: '🔍' },
   '#history':  { render: renderHistoryPage,  label: '分析记录', icon: '📋' },
   '#settings': { render: renderSettingsPage, label: '设置',     icon: '⚙️' },
+  '#admin':    { render: renderAdminPage,     label: '系统监控', icon: '📊', hidden: true },
 };
 
 let pageContainer = null;
@@ -35,9 +37,11 @@ export function createApp(rootEl) {
       <span>阅读诊断助手</span>
     </div>
     <div class="nav__links">
-      ${Object.entries(routes).map(([hash, { label, icon }]) =>
-        `<a class="nav__link" href="${hash}" data-route="${hash}">${icon} ${label}</a>`
-      ).join('')}
+      ${Object.entries(routes)
+        .filter(([_, value]) => !value.hidden)
+        .map(([hash, { label, icon }]) =>
+          `<a class="nav__link" href="${hash}" data-route="${hash}">${icon} ${label}</a>`
+        ).join('')}
     </div>
     <div class="nav__right">
       <div class="nav__usage" id="nav-usage">

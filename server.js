@@ -126,6 +126,88 @@ app.post('/api/telemetry', (req, res) => {
   res.json({ success: true });
 });
 
+// ---- 获取埋点统计指标接口 ----
+app.get('/api/telemetry/stats', (req, res) => {
+  const adminPassword = process.env.ADMIN_PASSWORD || 'fxai@admin';
+  const reqPassword = req.headers['x-admin-password'];
+
+  if (reqPassword !== adminPassword) {
+    return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
+  }
+
+  try {
+    let logs = [];
+    if (existsSync(TELEMETRY_FILE)) {
+      const content = readFileSync(TELEMETRY_FILE, 'utf-8').trim();
+      if (content) {
+        logs = JSON.parse(content);
+      }
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // 统计指标初始化
+    let totalPV = 0;
+    const totalDevices = new Set();
+    let totalAnalyzeCount = 0;
+    const totalAnalyzeDevices = new Set();
+
+    let todayPV = 0;
+    const todayDevices = new Set();
+    let todayAnalyzeCount = 0;
+    const todayAnalyzeDevices = new Set();
+
+    logs.forEach(log => {
+      // 提取日期 (YYYY-MM-DD)
+      const logDateStr = log.timestamp ? log.timestamp.split('T')[0] : '';
+      const fp = log.fingerprint || log.ip || 'unknown';
+      const isToday = logDateStr === todayStr;
+
+      // 累计统计
+      if (log.type === 'pv') {
+        totalPV++;
+        totalDevices.add(fp);
+      } else if (log.type === 'api_performance' && log.status === 'success') {
+        totalAnalyzeCount++;
+        totalAnalyzeDevices.add(fp);
+      }
+
+      // 今日统计
+      if (isToday) {
+        if (log.type === 'pv') {
+          todayPV++;
+          todayDevices.add(fp);
+        } else if (log.type === 'api_performance' && log.status === 'success') {
+          todayAnalyzeCount++;
+          todayAnalyzeDevices.add(fp);
+        }
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        today: {
+          pv: todayPV,
+          uv: todayDevices.size,
+          analyzeCount: todayAnalyzeCount,
+          analyzeUv: todayAnalyzeDevices.size
+        },
+        total: {
+          pv: totalPV,
+          uv: totalDevices.size,
+          analyzeCount: totalAnalyzeCount,
+          analyzeUv: totalAnalyzeDevices.size
+        },
+        recentLogs: logs.slice(-50).reverse()
+      }
+    });
+  } catch (err) {
+    console.error('获取统计数据失败:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ---- OCR 接口 ----
 app.post('/api/ocr', async (req, res) => {
   if (!DASHSCOPE_KEY) {
