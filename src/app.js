@@ -6,6 +6,8 @@ import { renderAnalysisPage } from './pages/analysis.js';
 import { renderHistoryPage } from './pages/history.js';
 import { renderSettingsPage } from './pages/settings.js';
 import { getRemaining, getLimit } from './services/limits.js';
+import { getDeviceFingerprint } from './services/fingerprint.js';
+import { trackPV } from './utils/telemetry.js';
 
 const routes = {
   '#analysis': { render: renderAnalysisPage, label: '答案诊断', icon: '🔍' },
@@ -20,6 +22,9 @@ let pageContainer = null;
  * @param {HTMLElement} rootEl - 挂载点 #app
  */
 export function createApp(rootEl) {
+  // 静默初始化设备指纹
+  getDeviceFingerprint();
+
   // 导航栏
   const nav = document.createElement('nav');
   nav.className = 'nav no-print';
@@ -65,6 +70,9 @@ export function createApp(rootEl) {
     nav.querySelectorAll('.nav__link').forEach(link => {
       link.classList.toggle('nav__link--active', link.dataset.route === hash);
     });
+
+    // 监测页面访问 (PV)
+    trackPV(hash);
 
     // 渲染页面
     route.render(pageContainer);

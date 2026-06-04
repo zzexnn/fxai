@@ -59,7 +59,7 @@ function validateResult(result) {
  * @param {'deep'|'standard'} params.mode - 分析模式
  * @returns {Promise<object>} 解析后的诊断结果 JSON
  */
-export async function analyzeAnswers({ systemPrompt, userContent, mode }) {
+export async function analyzeAnswers({ systemPrompt, userContent, mode, fingerprint }) {
   if (!systemPrompt) throw new Error('缺少系统提示词');
   if (!userContent) throw new Error('缺少用户消息内容');
 
@@ -75,6 +75,7 @@ export async function analyzeAnswers({ systemPrompt, userContent, mode }) {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
       ],
+      fingerprint,
     }),
   });
 

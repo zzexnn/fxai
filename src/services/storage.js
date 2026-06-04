@@ -71,3 +71,32 @@ export function deleteHistory(id) {
 export function clearHistory() {
   localStorage.removeItem(STORAGE_KEYS.HISTORY);
 }
+
+/**
+ * 检查是否有完全相同输入的缓存结果
+ * @param {object} inputs - 包含 question, article, referenceAnswer, studentAnswers 的输入对象
+ * @returns {object|null} 匹配到的已有诊断记录，若无则返回 null
+ */
+export function findCachedResult(inputs) {
+  const list = getHistory();
+  return list.find(record => {
+    const recInputs = record.inputs;
+    if (!recInputs) return false;
+    
+    // 比对题目、文章、参考答案（剔除首尾空白）
+    if ((recInputs.question || '').trim() !== (inputs.question || '').trim()) return false;
+    if ((recInputs.article || '').trim() !== (inputs.article || '').trim()) return false;
+    if ((recInputs.referenceAnswer || '').trim() !== (inputs.referenceAnswer || '').trim()) return false;
+    
+    // 比对学生回答数组
+    const s1 = recInputs.studentAnswers || [];
+    const s2 = inputs.studentAnswers || [];
+    if (s1.length !== s2.length) return false;
+    
+    for (let i = 0; i < s1.length; i++) {
+      if ((s1[i] || '').trim() !== (s2[i] || '').trim()) return false;
+    }
+    
+    return true;
+  }) || null;
+}

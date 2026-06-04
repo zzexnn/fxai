@@ -23,7 +23,7 @@ async function processAndAddImages(entry, files, gridEl) {
   renderGrid(entry, gridEl);
 }
 
-/** 内部状态 */
+/** 内部状态：在模块生命周期内保留以支持草稿恢复 */
 let entries = [];
 let nextIndex = 1;
 let containerEl = null;
@@ -33,9 +33,6 @@ let containerEl = null;
  * @returns {HTMLElement}
  */
 export function createStudentInput() {
-  entries = [];
-  nextIndex = 1;
-
   const wrapper = document.createElement('div');
   wrapper.className = 'student-input-wrapper';
   containerEl = wrapper;
@@ -54,20 +51,35 @@ export function createStudentInput() {
   addBtn.addEventListener('click', () => addEntry(listEl));
   wrapper.appendChild(addBtn);
 
-  // 初始添加一份答卷
-  addEntry(listEl);
+  if (entries.length === 0) {
+    nextIndex = 1;
+    addEntry(listEl);
+  } else {
+    // 恢复渲染已有的答卷列表
+    entries.forEach(entry => {
+      addEntry(listEl, entry);
+    });
+  }
 
   return wrapper;
 }
 
 /**
- * 添加一份新答卷
+ * 添加一份新答卷（或渲染已有的答卷）
  */
-function addEntry(listEl) {
-  const index = nextIndex++;
-  const entryId = `student-${index}`;
-  const entry = { id: entryId, index, mode: 'text', images: [] };
-  entries.push(entry);
+function addEntry(listEl, existingEntry = null) {
+  let entry;
+  if (existingEntry) {
+    entry = existingEntry;
+  } else {
+    const index = nextIndex++;
+    const entryId = `student-${index}`;
+    entry = { id: entryId, index, mode: 'text', images: [], text: '' };
+    entries.push(entry);
+  }
+
+  const entryId = entry.id;
+  const index = entry.index;
 
   const entryEl = document.createElement('div');
   entryEl.className = 'student-entry';
@@ -84,7 +96,7 @@ function addEntry(listEl) {
       ${canDelete ? `<button class="btn btn--ghost btn--sm entry-delete" data-entry-id="${entryId}" title="删除此答卷">✕</button>` : ''}
     </div>
     <div class="tabs" style="margin-bottom:var(--space-3);">
-      <button class="tabs__item tabs__item--active" data-tab="text" data-entry-id="${entryId}">文字输入</button>
+      <button class="tabs__item" data-tab="text" data-entry-id="${entryId}">文字输入</button>
       <button class="tabs__item" data-tab="image" data-entry-id="${entryId}">图片上传</button>
     </div>
     <div id="${entryId}-text-panel">
@@ -110,6 +122,29 @@ function addEntry(listEl) {
   listEl.appendChild(entryEl);
   bindEntryEvents(entryEl, entry);
   updateDeleteButtons(listEl);
+
+  // 恢复文字状态与绑定 input 监听
+  const textarea = entryEl.querySelector(`#${entryId}-textarea`);
+  if (textarea) {
+    textarea.value = entry.text || '';
+    textarea.addEventListener('input', () => {
+      entry.text = textarea.value;
+    });
+  }
+
+  // 恢复 Tab 切换状态与显示面板
+  const tabs = entryEl.querySelectorAll('.tabs__item');
+  tabs.forEach(t => {
+    t.classList.toggle('tabs__item--active', t.dataset.tab === entry.mode);
+  });
+  entryEl.querySelector(`#${entryId}-text-panel`).style.display = entry.mode === 'text' ? '' : 'none';
+  entryEl.querySelector(`#${entryId}-image-panel`).style.display = entry.mode === 'image' ? '' : 'none';
+
+  // 恢复已选择的图片
+  if (entry.images.length > 0) {
+    const imageGrid = entryEl.querySelector(`#${entryId}-image-grid`);
+    renderGrid(entry, imageGrid);
+  }
 }
 
 /**
@@ -194,7 +229,6 @@ function updateDeleteButtons(listEl) {
     if (entries.length <= 1) {
       if (btn) btn.style.display = 'none';
     } else {
-      // 如果没有删除按钮，需要添加
       if (!btn) {
         const entryId = el.dataset.entryId;
         const header = el.querySelector('div');
@@ -247,9 +281,12 @@ async function renderGrid(entry, gridEl) {
 export function getStudentInputData() {
   return entries.map(entry => {
     const textarea = document.querySelector(`#${entry.id}-textarea`);
+    if (textarea) {
+      entry.text = textarea.value.trim();
+    }
     return {
       mode: entry.mode,
-      text: textarea ? textarea.value.trim() : '',
+      text: entry.text || '',
       images: [...entry.images],
     };
   });

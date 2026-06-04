@@ -5,7 +5,7 @@
  */
 
 import express from 'express';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -50,8 +50,81 @@ const DASHSCOPE_ENDPOINT = 'https://dashscope.aliyuncs.com/compatible-mode/v1/ch
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
 // ==========================================
-// API 路由（必须在静态文件之前）
+// 监测与安全策略
 // ==========================================
+
+const TELEMETRY_FILE = resolve(__dirname, 'telemetry.json');
+const LIMITS = {
+  deep: 3,
+  standard: 10,
+};
+
+// 内存次数库：dateString -> fingerprint -> { deep, standard }
+const fingerprintLimits = {};
+
+/**
+ * 校验并累计次数，防超限
+ */
+function checkAndRecordUsage(fp, mode) {
+  const today = new Date().toISOString().split('T')[0];
+
+  if (!fingerprintLimits[today]) {
+    fingerprintLimits[today] = {};
+  }
+  if (!fingerprintLimits[today][fp]) {
+    fingerprintLimits[today][fp] = { deep: 0, standard: 0 };
+  }
+
+  const limit = LIMITS[mode];
+  const current = fingerprintLimits[today][fp][mode] || 0;
+
+  if (current >= limit) {
+    return false;
+  }
+
+  fingerprintLimits[today][fp][mode] = current + 1;
+  return true;
+}
+
+/**
+ * 将埋点日志安全写入本地 JSON 文件，限额 1000 条防硬盘爆满
+ */
+function writeTelemetryLog(log) {
+  try {
+    let logs = [];
+    if (existsSync(TELEMETRY_FILE)) {
+      const content = readFileSync(TELEMETRY_FILE, 'utf-8').trim();
+      if (content) {
+        logs = JSON.parse(content);
+      }
+    }
+    logs.push(log);
+
+    // 最大保留 1000 条，保护服务器空间
+    if (logs.length > 1000) {
+      logs = logs.slice(logs.length - 1000);
+    }
+
+    writeFileSync(TELEMETRY_FILE, JSON.stringify(logs, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Telemetry] 写入日志失败:', err);
+  }
+}
+
+// ==========================================
+// API 路由
+// ==========================================
+
+// ---- 前端埋点数据接收接口 ----
+app.post('/api/telemetry', (req, res) => {
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const logEntry = {
+    ip: clientIp,
+    ...req.body,
+  };
+  writeTelemetryLog(logEntry);
+  res.json({ success: true });
+});
 
 // ---- OCR 接口 ----
 app.post('/api/ocr', async (req, res) => {
@@ -84,14 +157,30 @@ app.post('/api/ocr', async (req, res) => {
   }
 });
 
-// ---- AI 分析接口 ----
+// ---- AI 分析接口 (带指纹拦截与性能监控) ----
 app.post('/api/analyze', async (req, res) => {
   if (!OPENROUTER_KEY) {
     return res.status(500).json({ error: '服务端未配置 OpenRouter API Key' });
   }
 
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const { model, messages, temperature, fingerprint } = req.body;
+
+  // 使用上传的指纹，若无则使用 IP 作为兜底限额 Key
+  const fp = fingerprint || clientIp;
+  const mode = model.includes('claude') ? 'deep' : 'standard';
+
+  // 1. 服务端配额拦截
+  const allowed = checkAndRecordUsage(fp, mode);
+  if (!allowed) {
+    return res.status(429).json({
+      error: `今日分析次数已用完（本设备每日标准限额 ${LIMITS.standard} 次，深度限额 ${LIMITS.deep} 次）`
+    });
+  }
+
+  const startTime = Date.now();
+
   try {
-    const { model, messages, temperature } = req.body;
     const response = await fetch(OPENROUTER_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -103,11 +192,53 @@ app.post('/api/analyze', async (req, res) => {
     });
 
     const data = await response.json();
+    const duration = Date.now() - startTime;
+
     if (!response.ok) {
+      writeTelemetryLog({
+        timestamp: new Date().toISOString(),
+        type: 'api_performance',
+        fingerprint: fp,
+        ip: clientIp,
+        api: '/api/analyze',
+        duration_ms: duration,
+        status: 'failed',
+        error: data.error?.message || 'API 请求失败',
+        model
+      });
       return res.status(response.status).json(data);
     }
+
+    // 统计输入字符数
+    const charCount = messages.map(m => m.content || '').join('').length;
+
+    // 记录使用性能日志
+    writeTelemetryLog({
+      timestamp: new Date().toISOString(),
+      type: 'api_performance',
+      fingerprint: fp,
+      ip: clientIp,
+      api: '/api/analyze',
+      duration_ms: duration,
+      status: 'success',
+      model,
+      char_count: charCount
+    });
+
     res.json(data);
   } catch (err) {
+    const duration = Date.now() - startTime;
+    writeTelemetryLog({
+      timestamp: new Date().toISOString(),
+      type: 'api_performance',
+      fingerprint: fp,
+      ip: clientIp,
+      api: '/api/analyze',
+      duration_ms: duration,
+      status: 'failed',
+      error: err.message,
+      model
+    });
     console.error('分析代理错误:', err);
     res.status(500).json({ error: `分析请求失败: ${err.message}` });
   }

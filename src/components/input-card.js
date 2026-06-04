@@ -1,13 +1,13 @@
 /**
  * 通用输入卡片组件
  * 支持文字输入和图片上传两种模式
- * 图片上传支持拖拽、点击选择、缩略图预览
+ * 图片上传支持拖拽、点击选择、缩略图预览、相机拍照
  */
 
 import { readFileAsDataURL } from '../utils/helpers.js';
 import { cropImage } from './image-cropper.js';
 
-/** 每个卡片的状态：id → { mode, images } */
+/** 每个卡片的状态：id → { mode, images, text } */
 const cardStates = new Map();
 
 /**
@@ -21,8 +21,11 @@ const cardStates = new Map();
  * @returns {HTMLElement} 卡片元素
  */
 export function createInputCard({ id, title, icon, required = false, placeholder = '' }) {
-  // 初始化状态
-  cardStates.set(id, { mode: 'text', images: [] });
+  // 如果没有状态，则初始化
+  if (!cardStates.has(id)) {
+    cardStates.set(id, { mode: 'text', images: [], text: '' });
+  }
+  const state = cardStates.get(id);
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -73,6 +76,15 @@ export function createInputCard({ id, title, icon, required = false, placeholder
   const fileInput = card.querySelector(`#${id}-file-input`);
   const cameraInput = card.querySelector(`#${id}-camera-input`);
   const imageGrid = card.querySelector(`#${id}-image-grid`);
+  const textarea = card.querySelector(`#${id}-textarea`);
+
+  // 恢复文字与监听实时修改
+  if (textarea) {
+    textarea.value = state.text || '';
+    textarea.addEventListener('input', () => {
+      state.text = textarea.value;
+    });
+  }
 
   // Tab 切换
   tabs.forEach((tab) => {
@@ -80,8 +92,6 @@ export function createInputCard({ id, title, icon, required = false, placeholder
       const tabType = tab.dataset.tab;
       tabs.forEach((t) => t.classList.remove('tabs__item--active'));
       tab.classList.add('tabs__item--active');
-
-      const state = cardStates.get(id);
       state.mode = tabType;
 
       if (tabType === 'text') {
@@ -93,6 +103,20 @@ export function createInputCard({ id, title, icon, required = false, placeholder
       }
     });
   });
+
+  // 恢复已选择的 Tab 模式并同步显示面板
+  if (state.mode === 'image') {
+    tabs.forEach((t) => {
+      t.classList.toggle('tabs__item--active', t.dataset.tab === 'image');
+    });
+    textPanel.style.display = 'none';
+    imagePanel.style.display = '';
+  }
+
+  // 恢复已上传的图片缩略图
+  if (state.images.length > 0) {
+    renderImageGrid(id, imageGrid);
+  }
 
   // 点击上传区域触发文件选择 / 拍照选择
   uploadZone.addEventListener('click', () => fileInput.click());
@@ -125,14 +149,6 @@ export function createInputCard({ id, title, icon, required = false, placeholder
     const files = Array.from(cameraInput.files);
     if (files.length > 0) addImages(id, files, imageGrid);
     cameraInput.value = '';
-  });
-
-  // 图片网格事件委托（删除按钮）
-  imageGrid.addEventListener('click', (e) => {
-    const removeBtn = e.target.closest('.image-grid__remove');
-    if (!removeBtn) return;
-    const index = parseInt(removeBtn.dataset.index, 10);
-    removeImage(id, index, imageGrid);
   });
 
   return card;
@@ -204,8 +220,8 @@ async function renderImageGrid(id, gridEl) {
     removeBtn.className = 'image-grid__remove';
     removeBtn.dataset.index = i;
     removeBtn.textContent = '×';
-    item.appendChild(removeBtn);
 
+    item.appendChild(removeBtn);
     gridEl.appendChild(item);
   }
 }
@@ -220,9 +236,12 @@ export function getInputCardData(id) {
   if (!state) return { mode: 'text', text: '', images: [] };
 
   const textarea = document.querySelector(`#${id}-textarea`);
+  if (textarea) {
+    state.text = textarea.value.trim();
+  }
   return {
     mode: state.mode,
-    text: textarea ? textarea.value.trim() : '',
+    text: state.text || '',
     images: [...state.images],
   };
 }
@@ -238,6 +257,7 @@ export function clearInputCard(id) {
   // 重置状态
   state.mode = 'text';
   state.images = [];
+  state.text = '';
 
   // 清空 textarea
   const textarea = document.querySelector(`#${id}-textarea`);

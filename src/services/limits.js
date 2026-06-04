@@ -15,6 +15,41 @@ const LIMITS = {
 };
 
 /**
+ * 本地混淆加密函数 (Salt-Shuffled Base64)
+ */
+function obfuscate(str) {
+  try {
+    const utf8Bytes = new TextEncoder().encode(str);
+    const base64 = btoa(String.fromCharCode(...utf8Bytes));
+    // 在 Base64 数据前后注入无意义盐值，并反转字符串
+    return 'fx_salt_' + base64.split('').reverse().join('') + '_hash';
+  } catch {
+    return btoa(str);
+  }
+}
+
+/**
+ * 本地解密还原函数
+ */
+function deobfuscate(str) {
+  try {
+    if (!str.startsWith('fx_salt_') || !str.endsWith('_hash')) {
+      throw new Error('解密格式异常');
+    }
+    const clean = str.substring(8, str.length - 5);
+    const reversed = clean.split('').reverse().join('');
+    const binary = atob(reversed);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch (e) {
+    throw new Error('解密还原失败: ' + e.message);
+  }
+}
+
+/**
  * 获取今日的使用数据
  * 如果存储的日期不是今天，自动重置
  * @returns {{ date: string, deep: number, standard: number }}
@@ -26,7 +61,8 @@ function getUsageData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { date: today, deep: 0, standard: 0 };
 
-    const data = JSON.parse(raw);
+    const decrypted = deobfuscate(raw);
+    const data = JSON.parse(decrypted);
     // 日期不是今天，自动重置
     if (data.date !== today) {
       return { date: today, deep: 0, standard: 0 };
@@ -36,8 +72,11 @@ function getUsageData() {
       deep: data.deep || 0,
       standard: data.standard || 0,
     };
-  } catch {
-    return { date: today, deep: 0, standard: 0 };
+  } catch (err) {
+    // 篡改或解析失败，重置为今日初始值
+    const initial = { date: today, deep: 0, standard: 0 };
+    saveUsageData(initial);
+    return initial;
   }
 }
 
@@ -46,7 +85,8 @@ function getUsageData() {
  * @param {{ date: string, deep: number, standard: number }} data
  */
 function saveUsageData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  const raw = JSON.stringify(data);
+  localStorage.setItem(STORAGE_KEY, obfuscate(raw));
 }
 
 /**

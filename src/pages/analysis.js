@@ -14,8 +14,10 @@ import { buildSystemPrompt, buildUserContent } from '../utils/prompt-builder.js'
 import { generateId, formatDateTime, debounce } from '../utils/helpers.js';
 import { recognizeImages } from '../services/ocr.js';
 import { analyzeAnswers } from '../services/analyzer.js';
-import { addHistory } from '../services/storage.js';
+import { addHistory, findCachedResult } from '../services/storage.js';
 import { canUse, getRemaining, getLimit, recordUsage } from '../services/limits.js';
+import { getDeviceFingerprint } from '../services/fingerprint.js';
+import { trackAction } from '../utils/telemetry.js';
 
 let lastRecord = null;
 
@@ -164,21 +166,28 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
   const hasStudent = studentData.some(s => s.mode === 'text' ? s.text.length > 0 : s.images.length > 0);
   const hasReference = referenceData.mode === 'text' ? referenceData.text.length > 0 : referenceData.images.length > 0;
 
+  // 用户点击“开始分析”行为埋点
+  trackAction('click_analyze', { mode });
+
   if (!hasQuestion) {
+    trackAction('validation_failed', { reason: 'missing_question' });
     Toast.show('请输入题目内容或上传题目图片', 'warning');
     return;
   }
   if (!hasReference) {
+    trackAction('validation_failed', { reason: 'missing_reference' });
     Toast.show('请输入参考答案或上传参考答案图片', 'warning');
     return;
   }
   if (!hasStudent) {
+    trackAction('validation_failed', { reason: 'missing_student' });
     Toast.show('请输入至少一份学生回答', 'warning');
     return;
   }
 
   // 2. 检查使用次数
   if (!canUse(mode)) {
+    trackAction('limit_exceeded', { mode });
     Toast.show(`今日${mode === 'deep' ? '深度' : '标准'}分析次数已用完`, 'warning');
     return;
   }
@@ -259,38 +268,55 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
     const resolvedType = getResolvedType();
     const typeKnowledge = resolvedType ? getQuestionType(resolvedType) : null;
 
-    // 7. 拼装 Prompt
-    const systemPrompt = buildSystemPrompt(typeKnowledge);
-    const userContent = buildUserContent({
+    // 6. 检查本地是否有完全相同的输入缓存
+    const inputPayload = {
       question: questionText,
       article: articleText,
       referenceAnswer: referenceText,
       studentAnswers: studentTexts.filter(t => t.length > 0),
-    });
+    };
 
-    // 8. 调用 AI 分析
-    Toast.show(`正在进行${mode === 'deep' ? '深度' : '标准'}分析，请稍候...`, 'info');
+    const cachedRecord = findCachedResult(inputPayload);
+    let result;
+    let isFromCache = false;
 
-    const result = await analyzeAnswers({
-      systemPrompt,
-      userContent,
-      mode,
-    });
-
-    // 9. 构建记录并展示
-    const record = {
-      id: generateId(),
-      timestamp: new Date().toISOString(),
-      inputs: {
+    if (cachedRecord) {
+      result = cachedRecord.result;
+      isFromCache = true;
+      Toast.show('检测到完全相同的历史记录，已直接复用分析结果（不扣除额度）', 'success');
+      trackAction('cache_hit', { mode });
+    } else {
+      // 7. 拼装 Prompt 并请求 AI 
+      const systemPrompt = buildSystemPrompt(typeKnowledge);
+      const userContent = buildUserContent({
         question: questionText,
         article: articleText,
         referenceAnswer: referenceText,
-        studentAnswers: studentTexts.filter(t => t.length > 0),
-      },
-      questionType: resolvedType || result.题型 || '未知',
-      mode,
+        studentAnswers: inputPayload.studentAnswers,
+      });
+
+      Toast.show(`正在进行${mode === 'deep' ? '深度' : '标准'}分析，请稍候...`, 'info');
+
+      // 获取设备指纹传入
+      const fingerprint = getDeviceFingerprint();
+
+      result = await analyzeAnswers({
+        systemPrompt,
+        userContent,
+        mode,
+        fingerprint,
+      });
+    }
+
+    // 8. 构建记录并展示
+    const record = {
+      id: generateId(),
+      timestamp: new Date().toISOString(),
+      inputs: inputPayload,
+      questionType: resolvedType || (cachedRecord ? cachedRecord.questionType : (result.题型 || '未知')),
+      mode: cachedRecord ? cachedRecord.mode : mode,
       result,
-      modelUsed: mode === 'deep' ? 'anthropic/claude-sonnet-4.6' : 'deepseek/deepseek-v4-pro',
+      modelUsed: cachedRecord ? cachedRecord.modelUsed : (mode === 'deep' ? 'anthropic/claude-sonnet-4.6' : 'deepseek/deepseek-v4-pro'),
     };
 
     // 显示结果
@@ -300,17 +326,26 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
     // 保存历史
     addHistory(record);
 
-    // 记录使用次数
-    recordUsage(mode);
+    // 只有在非缓存情况下，才扣除次数并记录使用量
+    if (!isFromCache) {
+      recordUsage(mode);
 
-    // 刷新导航栏使用量
-    window.dispatchEvent(new CustomEvent('usage-changed'));
+      // 刷新导航栏使用量
+      window.dispatchEvent(new CustomEvent('usage-changed'));
 
-    // 更新按钮旁的剩余次数显示
-    const stdEl = document.querySelector('#std-remaining');
-    const deepEl = document.querySelector('#deep-remaining');
-    if (stdEl) stdEl.textContent = `剩余 ${getRemaining('standard')}/${getLimit('standard')}`;
-    if (deepEl) deepEl.textContent = `剩余 ${getRemaining('deep')}/${getLimit('deep')}`;
+      // 更新按钮旁的剩余次数显示
+      const stdEl = document.querySelector('#std-remaining');
+      const deepEl = document.querySelector('#deep-remaining');
+      if (stdEl) stdEl.textContent = `剩余 ${getRemaining('standard')}/${getLimit('standard')}`;
+      if (deepEl) deepEl.textContent = `剩余 ${getRemaining('deep')}/${getLimit('deep')}`;
+    }
+
+    // 上报分析成功埋点
+    trackAction('analyze_success', {
+      mode,
+      questionType: record.questionType,
+      isFromCache,
+    });
 
     Toast.show('分析完成！', 'success');
 
@@ -319,6 +354,10 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
 
   } catch (err) {
     console.error('分析失败:', err);
+    trackAction('analyze_failed', {
+      mode,
+      error: err.message,
+    });
     Toast.show(`分析失败: ${err.message}`, 'error');
   } finally {
     setLoading(submitBtn, false);
