@@ -4,6 +4,24 @@
  */
 
 import { readFileAsDataURL } from '../utils/helpers.js';
+import { cropImage } from './image-cropper.js';
+
+/**
+ * 异步裁剪并导入图片
+ */
+async function processAndAddImages(entry, files, gridEl) {
+  const processedFiles = [];
+  for (const file of files) {
+    try {
+      const cropped = await cropImage(file);
+      processedFiles.push(cropped);
+    } catch (e) {
+      processedFiles.push(file);
+    }
+  }
+  entry.images.push(...processedFiles);
+  renderGrid(entry, gridEl);
+}
 
 /** 内部状态 */
 let entries = [];
@@ -125,24 +143,24 @@ function bindEntryEvents(entryEl, entry) {
 
   uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('upload-zone--dragover'); });
   uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('upload-zone--dragover'));
-  uploadZone.addEventListener('drop', e => {
+  uploadZone.addEventListener('drop', async e => {
     e.preventDefault();
     uploadZone.classList.remove('upload-zone--dragover');
     const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
-    if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
+    if (files.length) { await processAndAddImages(entry, files, imageGrid); }
   });
 
   // 文件选择
-  fileInput.addEventListener('change', () => {
+  fileInput.addEventListener('change', async () => {
     const files = Array.from(fileInput.files);
-    if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
+    if (files.length) { await processAndAddImages(entry, files, imageGrid); }
     fileInput.value = '';
   });
 
   // 拍照选择
-  cameraInput.addEventListener('change', () => {
+  cameraInput.addEventListener('change', async () => {
     const files = Array.from(cameraInput.files);
-    if (files.length) { entry.images.push(...files); renderGrid(entry, imageGrid); }
+    if (files.length) { await processAndAddImages(entry, files, imageGrid); }
     cameraInput.value = '';
   });
 

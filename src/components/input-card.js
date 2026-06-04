@@ -5,6 +5,7 @@
  */
 
 import { readFileAsDataURL } from '../utils/helpers.js';
+import { cropImage } from './image-cropper.js';
 
 /** 每个卡片的状态：id → { mode, images } */
 const cardStates = new Map();
@@ -145,7 +146,18 @@ export function createInputCard({ id, title, icon, required = false, placeholder
  */
 async function addImages(id, files, gridEl) {
   const state = cardStates.get(id);
-  state.images.push(...files);
+  
+  const processedFiles = [];
+  for (const file of files) {
+    try {
+      const cropped = await cropImage(file);
+      processedFiles.push(cropped);
+    } catch (e) {
+      processedFiles.push(file);
+    }
+  }
+
+  state.images.push(...processedFiles);
   await renderImageGrid(id, gridEl);
 }
 
