@@ -79,24 +79,39 @@ export function clearHistory() {
  */
 export function findCachedResult(inputs) {
   const list = getHistory();
-  return list.find(record => {
-    const recInputs = record.inputs;
-    if (!recInputs) return false;
-    
-    // 比对题目、文章、参考答案（剔除首尾空白）
-    if ((recInputs.question || '').trim() !== (inputs.question || '').trim()) return false;
-    if ((recInputs.article || '').trim() !== (inputs.article || '').trim()) return false;
-    if ((recInputs.referenceAnswer || '').trim() !== (inputs.referenceAnswer || '').trim()) return false;
-    
-    // 比对学生回答数组
-    const s1 = recInputs.studentAnswers || [];
-    const s2 = inputs.studentAnswers || [];
-    if (s1.length !== s2.length) return false;
-    
-    for (let i = 0; i < s1.length; i++) {
-      if ((s1[i] || '').trim() !== (s2[i] || '').trim()) return false;
+
+  for (const record of list) {
+    if (Array.isArray(record.questions)) {
+      const matchedQuestion = record.questions.find(question => inputsMatch(question.inputs, inputs));
+      if (matchedQuestion) {
+        return {
+          ...matchedQuestion,
+          parentId: record.id,
+          timestamp: record.timestamp,
+        };
+      }
+    } else if (inputsMatch(record.inputs, inputs)) {
+      return record;
     }
-    
-    return true;
-  }) || null;
+  }
+
+  return null;
+}
+
+function inputsMatch(recInputs, inputs) {
+  if (!recInputs) return false;
+
+  if ((recInputs.question || '').trim() !== (inputs.question || '').trim()) return false;
+  if ((recInputs.article || '').trim() !== (inputs.article || '').trim()) return false;
+  if ((recInputs.referenceAnswer || '').trim() !== (inputs.referenceAnswer || '').trim()) return false;
+
+  const s1 = recInputs.studentAnswers || [];
+  const s2 = inputs.studentAnswers || [];
+  if (s1.length !== s2.length) return false;
+
+  for (let i = 0; i < s1.length; i++) {
+    if ((s1[i] || '').trim() !== (s2[i] || '').trim()) return false;
+  }
+
+  return true;
 }

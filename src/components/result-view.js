@@ -13,6 +13,11 @@ import { renderRemediationPanel } from './remediation-panel.js';
  * @param {object} analysisRecord - 分析记录
  */
 export function renderResults(container, analysisRecord) {
+  if (analysisRecord.questions && analysisRecord.questions.length > 1) {
+    renderBatchResults(container, analysisRecord);
+    return;
+  }
+
   const { result } = analysisRecord;
   if (!result) return;
 
@@ -67,6 +72,89 @@ export function renderResults(container, analysisRecord) {
   // 绑定导出事件
   section.querySelector('#export-print-btn')?.addEventListener('click', () => exportAsPrint(analysisRecord));
   section.querySelector('#export-json-btn')?.addEventListener('click', () => exportAsJSON(analysisRecord));
+}
+
+/**
+ * 渲染多题批量诊断结果
+ */
+function renderBatchResults(container, analysisRecord) {
+  const questions = analysisRecord.questions || [];
+  if (questions.length === 0) return;
+
+  clearResults(container);
+
+  const section = document.createElement('div');
+  section.className = 'result-section result-section--batch animate-fade-in-up';
+
+  const header = document.createElement('div');
+  header.className = 'result-section__header';
+  header.innerHTML = `
+    <div>
+      <h3 class="result-section__title">📊 批量诊断结果</h3>
+      <div class="result-section__subtitle">共 ${questions.length} 道题，按题独立分析</div>
+    </div>
+    <div class="result-section__actions no-print">
+      <button class="btn btn--secondary btn--sm" id="export-print-btn">🖨️ 打印</button>
+      <button class="btn btn--secondary btn--sm" id="export-json-btn">📥 导出JSON</button>
+    </div>
+  `;
+  section.appendChild(header);
+
+  questions.forEach(questionRecord => {
+    section.appendChild(createQuestionResultBlock(questionRecord));
+  });
+
+  container.appendChild(section);
+
+  section.querySelector('#export-print-btn')?.addEventListener('click', () => exportAsPrint(analysisRecord));
+  section.querySelector('#export-json-btn')?.addEventListener('click', () => exportAsJSON(analysisRecord));
+}
+
+function createQuestionResultBlock(questionRecord) {
+  const result = questionRecord.result || {};
+  const block = document.createElement('section');
+  block.className = 'question-result';
+
+  const cacheBadge = questionRecord.isFromCache ? '<span class="badge badge--success">复用缓存</span>' : '';
+  block.innerHTML = `
+    <div class="question-result__header">
+      <div>
+        <div class="question-result__eyebrow">第 ${questionRecord.index} 题</div>
+        <h4 class="question-result__title">${escapeHtml(questionRecord.questionType || result.题型 || '未知题型')}</h4>
+      </div>
+      <div class="question-result__badges">
+        ${cacheBadge}
+        <span class="badge ${getConfBadgeClass(result.题型置信度)}">置信度: ${escapeHtml(result.题型置信度 || '-')}</span>
+        <span class="badge ${getStatusBadgeClass(result.题型状态)}">${escapeHtml(result.题型状态 || '-')}</span>
+      </div>
+    </div>
+    <div class="question-result__inputs">
+      <div class="question-result__input">
+        <div class="question-result__label">题目</div>
+        <div class="question-result__text">${escapeHtml(questionRecord.inputs?.question || '')}</div>
+      </div>
+      <div class="question-result__input">
+        <div class="question-result__label">参考答案</div>
+        <div class="question-result__text">${escapeHtml(questionRecord.inputs?.referenceAnswer || '')}</div>
+      </div>
+      <div class="question-result__input">
+        <div class="question-result__label">学生作答</div>
+        <div class="question-result__text">${escapeHtml((questionRecord.inputs?.studentAnswers || []).join('\n\n'))}</div>
+      </div>
+    </div>
+  `;
+
+  const diagnoses = result.个体诊断 || [];
+  diagnoses.forEach(diag => {
+    block.appendChild(createDiagnosisCard(diag));
+  });
+
+  const summary = result.群体汇总;
+  if (summary && summary.length > 0) {
+    block.appendChild(createSummaryTable(summary));
+  }
+
+  return block;
 }
 
 /**
@@ -152,10 +240,8 @@ function createSummaryTable(summary) {
  * 清除结果区域
  */
 export function clearResults(container) {
-  const existing = container.querySelector('.result-section');
-  if (existing) existing.remove();
-  const remediation = container.querySelector('.remediation-panel');
-  if (remediation) remediation.remove();
+  container.querySelectorAll('.result-section').forEach(el => el.remove());
+  container.querySelectorAll('.remediation-panel').forEach(el => el.remove());
 }
 
 function getConfBadgeClass(conf) {

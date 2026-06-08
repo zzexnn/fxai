@@ -1,25 +1,29 @@
 /**
  * 主分析页面
- * 包含输入区域、题型选择、分析控制和结果展示
+ * 包含文章输入、多题组输入、分析控制和结果展示
  */
 
 import { createInputCard, getInputCardData, clearInputCard } from '../components/input-card.js';
-import { createStudentInput, getStudentInputData, clearStudentInput } from '../components/student-input.js';
-import { createTypeSelector, updateTypeDetection, getResolvedType } from '../components/type-selector.js';
 import { renderResults, clearResults } from '../components/result-view.js';
 import { showOcrPreview } from '../components/ocr-preview.js';
 import { Toast } from '../components/toast.js';
 import { getQuestionType } from '../data/question-types.js';
 import { buildSystemPrompt, buildUserContent } from '../utils/prompt-builder.js';
-import { generateId, formatDateTime, debounce } from '../utils/helpers.js';
+import { generateId } from '../utils/helpers.js';
+import { matchQuestionType } from '../utils/type-matcher.js';
 import { recognizeImages } from '../services/ocr.js';
 import { analyzeAnswers } from '../services/analyzer.js';
 import { addHistory, findCachedResult } from '../services/storage.js';
-import { canUse, getRemaining, getLimit, recordUsage } from '../services/limits.js';
+import { getRemaining, getLimit, recordUsage } from '../services/limits.js';
 import { getDeviceFingerprint } from '../services/fingerprint.js';
 import { trackAction } from '../utils/telemetry.js';
 
 let lastRecord = null;
+const MAX_QUESTION_GROUPS = 3;
+const MODEL_BY_MODE = {
+  deep: 'anthropic/claude-sonnet-4.6',
+  standard: 'deepseek/deepseek-v4-pro',
+};
 
 /**
  * 渲染分析页面
@@ -29,46 +33,35 @@ export function renderAnalysisPage(container) {
   lastRecord = null;
   container.innerHTML = '';
 
-  // 页面标题
   const header = document.createElement('div');
   header.style.cssText = 'margin-bottom:var(--space-6);';
   header.innerHTML = `
     <h2 style="margin-bottom:var(--space-2);">答案诊断</h2>
     <p style="font-size:var(--text-sm); color:var(--color-text-secondary);">
-      上传题目和学生回答，AI 将诊断作答中的失分点并归类错因
+      一篇文章最多配 3 道题，每道题独立诊断题型、参考答案和学生作答
     </p>
   `;
   container.appendChild(header);
 
-  // 输入网格 (2x2)
-  const grid = document.createElement('div');
-  grid.className = 'analysis-grid';
-
   const articleCard = createInputCard({ id: 'article', title: '文章', icon: '📄', required: false, placeholder: '粘贴文章原文...' });
-  const questionCard = createInputCard({ id: 'question', title: '题目', icon: '📝', required: true, placeholder: '粘贴题目内容...' });
-  const referenceCard = createInputCard({ id: 'reference', title: '参考答案', icon: '✅', required: true, placeholder: '粘贴参考答案...' });
+  articleCard.classList.add('analysis-article-card');
+  container.appendChild(articleCard);
 
-  // 学生回答区域包装为卡片样式
-  const studentWrapper = document.createElement('div');
-  studentWrapper.className = 'card';
-  studentWrapper.innerHTML = `
-    <div class="card__header">
-      <div class="card__title"><span class="card__title-icon">✏️</span>学生回答</div>
-      <span class="card__badge card__badge--required">必填</span>
-    </div>
+  const questionList = document.createElement('div');
+  questionList.className = 'question-groups';
+  questionList.id = 'question-groups';
+  container.appendChild(questionList);
+
+  const groupToolbar = document.createElement('div');
+  groupToolbar.className = 'question-groups__toolbar';
+  groupToolbar.innerHTML = `
+    <button class="btn btn--secondary btn--sm" id="add-question-group-btn">＋ 添加题目</button>
+    <span class="question-groups__limit">最多 3 道题</span>
   `;
-  const studentBody = document.createElement('div');
-  studentBody.className = 'card__body';
-  studentBody.appendChild(createStudentInput());
-  studentWrapper.appendChild(studentBody);
+  container.appendChild(groupToolbar);
 
-  grid.appendChild(articleCard);
-  grid.appendChild(questionCard);
-  grid.appendChild(referenceCard);
-  grid.appendChild(studentWrapper);
-  container.appendChild(grid);
+  addQuestionGroup(questionList, 1);
 
-  // 分析控制区域
   const actions = document.createElement('div');
   actions.className = 'analysis-actions';
 
@@ -80,17 +73,16 @@ export function renderAnalysisPage(container) {
   actions.innerHTML = `
     <div class="analysis-actions__header">
       <span class="analysis-actions__title">分析设置</span>
+      <span class="analysis-actions__hint">按题逐个分析，缓存命中不扣次数</span>
     </div>
-    <div id="type-selector-container"></div>
-    <div class="divider"></div>
     <div class="form-label">分析模式</div>
     <div class="radio-group" id="mode-selector">
-      <div class="radio-option radio-option--selected ${!canUse('standard') ? 'radio-option--disabled' : ''}" data-mode="standard">
+      <div class="radio-option radio-option--selected ${stdRemaining <= 0 ? 'radio-option--disabled' : ''}" data-mode="standard">
         <div class="radio-option__indicator"></div>
         <span class="radio-option__label">⚡ 标准分析</span>
         <span class="radio-option__meta" id="std-remaining">剩余 ${stdRemaining}/${stdLimit}</span>
       </div>
-      <div class="radio-option ${!canUse('deep') ? 'radio-option--disabled' : ''}" data-mode="deep">
+      <div class="radio-option ${deepRemaining <= 0 ? 'radio-option--disabled' : ''}" data-mode="deep">
         <div class="radio-option__indicator"></div>
         <span class="radio-option__label">✨ 深度分析</span>
         <span class="radio-option__meta" id="deep-remaining">剩余 ${deepRemaining}/${deepLimit}</span>
@@ -102,27 +94,23 @@ export function renderAnalysisPage(container) {
   `;
   container.appendChild(actions);
 
-  // 题型选择器插入
-  const typeSelectorContainer = actions.querySelector('#type-selector-container');
-  typeSelectorContainer.appendChild(createTypeSelector());
-
-  // 结果区域
   const resultContainer = document.createElement('div');
   resultContainer.id = 'result-container';
   container.appendChild(resultContainer);
 
-  // ---- 事件绑定 ----
-
   let selectedMode = 'standard';
 
-  // 题目输入变化 → 更新题型检测
-  const questionTextarea = document.querySelector('#question-textarea');
-  if (questionTextarea) {
-    const debouncedDetect = debounce((text) => updateTypeDetection(text), 500);
-    questionTextarea.addEventListener('input', () => debouncedDetect(questionTextarea.value));
-  }
+  const addGroupBtn = groupToolbar.querySelector('#add-question-group-btn');
+  addGroupBtn.addEventListener('click', () => {
+    const count = questionList.querySelectorAll('.question-group').length;
+    if (count >= MAX_QUESTION_GROUPS) {
+      Toast.show('最多只能添加 3 道题', 'warning');
+      return;
+    }
+    addQuestionGroup(questionList, count + 1);
+    updateQuestionGroupControls(questionList, addGroupBtn);
+  });
 
-  // 分析模式切换
   const modeSelector = actions.querySelector('#mode-selector');
   modeSelector.addEventListener('click', (e) => {
     const option = e.target.closest('.radio-option');
@@ -135,100 +123,68 @@ export function renderAnalysisPage(container) {
     option.classList.add('radio-option--selected');
   });
 
-  // 开始分析
   const submitBtn = actions.querySelector('#submit-btn');
   submitBtn.addEventListener('click', () => handleSubmit(selectedMode, resultContainer, submitBtn));
 
-  // 监听题型切换，动态响应并免除诊断刷新补救面板
-  const typeSelect = typeSelectorContainer.querySelector('#type-select');
-  if (typeSelect) {
-    typeSelect.addEventListener('change', () => {
-      if (lastRecord) {
-        const resolvedType = getResolvedType();
-        console.log('[Analysis] Dropdown changed, dynamic matching to:', resolvedType);
-        lastRecord.questionType = resolvedType || lastRecord.result.题型 || '未知';
-        renderResults(resultContainer, lastRecord);
-      }
-    });
-  }
+  updateQuestionGroupControls(questionList, addGroupBtn);
 }
 
 /**
  * 处理分析提交
  */
 async function handleSubmit(mode, resultContainer, submitBtn) {
-  // 1. 校验必填
-  const questionData = getInputCardData('question');
-  const studentData = getStudentInputData();
-  const referenceData = getInputCardData('reference');
-
-  const hasQuestion = questionData.mode === 'text' ? questionData.text.length > 0 : questionData.images.length > 0;
-  const hasStudent = studentData.some(s => s.mode === 'text' ? s.text.length > 0 : s.images.length > 0);
-  const hasReference = referenceData.mode === 'text' ? referenceData.text.length > 0 : referenceData.images.length > 0;
-
-  // 用户点击“开始分析”行为埋点
   trackAction('click_analyze', { mode });
 
-  if (!hasQuestion) {
-    trackAction('validation_failed', { reason: 'missing_question' });
-    Toast.show('请输入题目内容或上传题目图片', 'warning');
-    return;
-  }
-  if (!hasReference) {
-    trackAction('validation_failed', { reason: 'missing_reference' });
-    Toast.show('请输入参考答案或上传参考答案图片', 'warning');
-    return;
-  }
-  if (!hasStudent) {
-    trackAction('validation_failed', { reason: 'missing_student' });
-    Toast.show('请输入至少一份学生回答', 'warning');
+  const rawGroups = collectQuestionGroups();
+  if (rawGroups.length === 0) {
+    Toast.show('请至少保留 1 道题目', 'warning');
     return;
   }
 
-  // 2. 检查使用次数
-  if (!canUse(mode)) {
-    trackAction('limit_exceeded', { mode });
-    Toast.show(`今日${mode === 'deep' ? '深度' : '标准'}分析次数已用完`, 'warning');
+  const invalidGroup = rawGroups.find(group => {
+    return !hasInput(group.questionData) || !hasInput(group.referenceData) || !hasInput(group.studentData);
+  });
+  if (invalidGroup) {
+    trackAction('validation_failed', { reason: 'incomplete_question_group', groupIndex: invalidGroup.index });
+    Toast.show(`请补全第 ${invalidGroup.index} 题的题目、参考答案和学生作答`, 'warning');
     return;
   }
 
-  // 4. 收集所有输入
   const articleData = getInputCardData('article');
 
-  // 5. 处理图片 OCR
   setLoading(submitBtn, true);
 
   try {
-    // 收集需要 OCR 的图片
     const ocrTasks = [];
 
     if (articleData.mode === 'image' && articleData.images.length > 0) {
       ocrTasks.push({ label: '文章', images: articleData.images, field: 'article' });
     }
-    if (questionData.mode === 'image' && questionData.images.length > 0) {
-      ocrTasks.push({ label: '题目', images: questionData.images, field: 'question' });
-    }
-    if (referenceData.mode === 'image' && referenceData.images.length > 0) {
-      ocrTasks.push({ label: '参考答案', images: referenceData.images, field: 'reference' });
-    }
-    studentData.forEach((s, i) => {
-      if (s.mode === 'image' && s.images.length > 0) {
-        ocrTasks.push({ label: `答卷${i + 1}`, images: s.images, field: `student-${i}` });
+
+    const questionItems = rawGroups.map(group => ({
+      index: group.index,
+      questionText: group.questionData.mode === 'text' ? group.questionData.text : '',
+      referenceText: group.referenceData.mode === 'text' ? group.referenceData.text : '',
+      studentText: group.studentData.mode === 'text' ? group.studentData.text : '',
+    }));
+
+    rawGroups.forEach(group => {
+      if (group.questionData.mode === 'image' && group.questionData.images.length > 0) {
+        ocrTasks.push({ label: `第${group.index}题 - 题目`, images: group.questionData.images, field: `question-${group.index}` });
+      }
+      if (group.referenceData.mode === 'image' && group.referenceData.images.length > 0) {
+        ocrTasks.push({ label: `第${group.index}题 - 参考答案`, images: group.referenceData.images, field: `reference-${group.index}` });
+      }
+      if (group.studentData.mode === 'image' && group.studentData.images.length > 0) {
+        ocrTasks.push({ label: `第${group.index}题 - 学生作答`, images: group.studentData.images, field: `student-${group.index}` });
       }
     });
 
-    // 准备最终文本
     let articleText = articleData.mode === 'text' ? articleData.text : '';
-    let questionText = questionData.mode === 'text' ? questionData.text : '';
-    let referenceText = referenceData.mode === 'text' ? referenceData.text : '';
-    let studentTexts = studentData.map(s => s.mode === 'text' ? s.text : '');
 
-    // 如有图片需要 OCR
     if (ocrTasks.length > 0) {
-
       Toast.show('正在识别图片文字...', 'info');
 
-      // 并行 OCR 所有图片
       const ocrResults = [];
       for (const task of ocrTasks) {
         try {
@@ -240,116 +196,148 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
         }
       }
 
-      // 显示 OCR 预览
       const confirmed = await showOcrPreview(ocrResults);
       if (!confirmed) {
         setLoading(submitBtn, false);
         return;
       }
 
-      // 将确认后的文字填回
       confirmed.forEach(item => {
         if (item.field === 'article') articleText = item.text;
-        else if (item.field === 'question') questionText = item.text;
-        else if (item.field === 'reference') referenceText = item.text;
-        else if (item.field.startsWith('student-')) {
-          const idx = parseInt(item.field.split('-')[1], 10);
-          studentTexts[idx] = item.text;
+        else {
+          const [field, indexText] = item.field.split('-');
+          const index = parseInt(indexText, 10);
+          const target = questionItems.find(q => q.index === index);
+          if (!target) return;
+          if (field === 'question') target.questionText = item.text;
+          if (field === 'reference') target.referenceText = item.text;
+          if (field === 'student') target.studentText = item.text;
         }
       });
     }
 
-    // 6. 题型匹配
-    // 先用 OCR 后的题目文字再次触发检测
-    if (questionText) {
-      updateTypeDetection(questionText);
-    }
-
-    const resolvedType = getResolvedType();
-    const typeKnowledge = resolvedType ? getQuestionType(resolvedType) : null;
-
-    // 6. 检查本地是否有完全相同的输入缓存
-    const inputPayload = {
-      question: questionText,
-      article: articleText,
-      referenceAnswer: referenceText,
-      studentAnswers: studentTexts.filter(t => t.length > 0),
-    };
-
-    const cachedRecord = findCachedResult(inputPayload);
-    let result;
-    let isFromCache = false;
-
-    if (cachedRecord) {
-      result = cachedRecord.result;
-      isFromCache = true;
-      Toast.show('检测到完全相同的历史记录，已直接复用分析结果（不扣除额度）', 'success');
-      trackAction('cache_hit', { mode });
-    } else {
-      // 7. 拼装 Prompt 并请求 AI 
-      const systemPrompt = buildSystemPrompt(typeKnowledge);
-      const userContent = buildUserContent({
-        question: questionText,
+    const preparedItems = questionItems.map(item => {
+      const inputPayload = {
+        question: item.questionText.trim(),
         article: articleText,
-        referenceAnswer: referenceText,
-        studentAnswers: inputPayload.studentAnswers,
-      });
+        referenceAnswer: item.referenceText.trim(),
+        studentAnswers: [item.studentText.trim()].filter(t => t.length > 0),
+      };
+      const cachedRecord = findCachedResult(inputPayload);
+      return { ...item, inputPayload, cachedRecord };
+    });
 
-      Toast.show(`正在进行${mode === 'deep' ? '深度' : '标准'}分析，请稍候...`, 'info');
+    const emptyAfterOcr = preparedItems.find(item => {
+      return !item.inputPayload.question || !item.inputPayload.referenceAnswer || item.inputPayload.studentAnswers.length === 0;
+    });
+    if (emptyAfterOcr) {
+      Toast.show(`第 ${emptyAfterOcr.index} 题识别结果不完整，请在 OCR 预览中补全后再分析`, 'warning');
+      return;
+    }
 
-      // 获取设备指纹传入
-      const fingerprint = getDeviceFingerprint();
+    const pendingCount = preparedItems.filter(item => !item.cachedRecord).length;
+    if (pendingCount > getRemaining(mode)) {
+      trackAction('limit_exceeded', { mode, required: pendingCount });
+      Toast.show(`本次需要 ${pendingCount} 次${mode === 'deep' ? '深度' : '标准'}分析额度，当前剩余 ${getRemaining(mode)} 次`, 'warning');
+      return;
+    }
 
-      result = await analyzeAnswers({
-        systemPrompt,
-        userContent,
-        mode,
-        fingerprint,
+    const fingerprint = getDeviceFingerprint();
+    const questionRecords = [];
+    let usedCount = 0;
+    let cacheCount = 0;
+
+    for (let i = 0; i < preparedItems.length; i++) {
+      const item = preparedItems[i];
+      let result;
+      let questionType;
+      let modelUsed;
+      let isFromCache = false;
+
+      if (item.cachedRecord) {
+        result = item.cachedRecord.result;
+        questionType = item.cachedRecord.questionType || result.题型 || '未知';
+        modelUsed = item.cachedRecord.modelUsed || MODEL_BY_MODE[mode];
+        isFromCache = true;
+        cacheCount += 1;
+        trackAction('cache_hit', { mode, groupIndex: item.index });
+      } else {
+        const match = matchQuestionType(item.questionText);
+        const resolvedType = match.type;
+        const typeKnowledge = resolvedType ? getQuestionType(resolvedType) : null;
+        const systemPrompt = buildSystemPrompt(typeKnowledge);
+        const userContent = buildUserContent({
+          question: item.questionText,
+          article: articleText,
+          referenceAnswer: item.referenceText,
+          studentAnswers: item.inputPayload.studentAnswers,
+        });
+
+        Toast.show(`正在分析第 ${item.index} 题（${i + 1}/${preparedItems.length}）...`, 'info');
+
+        result = await analyzeAnswers({
+          systemPrompt,
+          userContent,
+          mode,
+          fingerprint,
+        });
+        questionType = resolvedType || result.题型 || '未知';
+        modelUsed = MODEL_BY_MODE[mode];
+        usedCount += 1;
+      }
+
+      questionRecords.push({
+        index: item.index,
+        inputs: item.inputPayload,
+        questionType,
+        mode: item.cachedRecord ? item.cachedRecord.mode || mode : mode,
+        result,
+        modelUsed,
+        isFromCache,
       });
     }
 
-    // 8. 构建记录并展示
     const record = {
       id: generateId(),
       timestamp: new Date().toISOString(),
-      inputs: inputPayload,
-      questionType: resolvedType || (cachedRecord ? cachedRecord.questionType : (result.题型 || '未知')),
-      mode: cachedRecord ? cachedRecord.mode : mode,
-      result,
-      modelUsed: cachedRecord ? cachedRecord.modelUsed : (mode === 'deep' ? 'anthropic/claude-sonnet-4.6' : 'deepseek/deepseek-v4-pro'),
+      isBatch: questionRecords.length > 1,
+      inputs: {
+        article: articleText,
+        question: questionRecords.length === 1 ? questionRecords[0].inputs.question : `${questionRecords.length} 道题目`,
+        referenceAnswer: questionRecords.length === 1 ? questionRecords[0].inputs.referenceAnswer : '见各题参考答案',
+        studentAnswers: questionRecords.length === 1 ? questionRecords[0].inputs.studentAnswers : [],
+      },
+      questionType: questionRecords.length === 1 ? questionRecords[0].questionType : `批量分析 ${questionRecords.length} 题`,
+      mode,
+      questions: questionRecords,
+      result: questionRecords.length === 1 ? questionRecords[0].result : null,
+      modelUsed: MODEL_BY_MODE[mode],
     };
 
-    // 显示结果
     renderResults(resultContainer, record);
     lastRecord = record;
 
-    // 保存历史
     addHistory(record);
 
-    // 只有在非缓存情况下，才扣除次数并记录使用量
-    if (!isFromCache) {
+    for (let i = 0; i < usedCount; i++) {
       recordUsage(mode);
-
-      // 刷新导航栏使用量
-      window.dispatchEvent(new CustomEvent('usage-changed'));
-
-      // 更新按钮旁的剩余次数显示
-      const stdEl = document.querySelector('#std-remaining');
-      const deepEl = document.querySelector('#deep-remaining');
-      if (stdEl) stdEl.textContent = `剩余 ${getRemaining('standard')}/${getLimit('standard')}`;
-      if (deepEl) deepEl.textContent = `剩余 ${getRemaining('deep')}/${getLimit('deep')}`;
     }
 
-    // 上报分析成功埋点
+    if (usedCount > 0) {
+      window.dispatchEvent(new CustomEvent('usage-changed'));
+      updateUsageLabels();
+    }
+
     trackAction('analyze_success', {
       mode,
-      questionType: record.questionType,
-      isFromCache,
+      questionCount: questionRecords.length,
+      usedCount,
+      cacheCount,
     });
 
-    Toast.show('分析完成！', 'success');
+    const cacheText = cacheCount > 0 ? `，其中 ${cacheCount} 题复用缓存` : '';
+    Toast.show(`分析完成${cacheText}`, 'success');
 
-    // 滚动到结果区域
     resultContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   } catch (err) {
@@ -376,4 +364,103 @@ function setLoading(btn, loading) {
     btn.disabled = false;
     btn.innerHTML = btn.dataset.originalText || '🔍 开始分析';
   }
+}
+
+function addQuestionGroup(listEl, index) {
+  const group = document.createElement('section');
+  group.className = 'question-group';
+  group.dataset.index = String(index);
+  group.innerHTML = `
+    <div class="question-group__header">
+      <div>
+        <div class="question-group__eyebrow">题组</div>
+        <h3 class="question-group__title">第 ${index} 题</h3>
+      </div>
+      <button class="btn btn--ghost btn--sm question-group__remove" type="button">删除</button>
+    </div>
+    <div class="question-group__fields"></div>
+  `;
+
+  const fields = group.querySelector('.question-group__fields');
+  fields.appendChild(createInputCard({
+    id: getQuestionFieldId(index, 'question'),
+    title: '题目',
+    icon: '📝',
+    required: true,
+    placeholder: `粘贴第 ${index} 题题目...`,
+  }));
+  fields.appendChild(createInputCard({
+    id: getQuestionFieldId(index, 'reference'),
+    title: '参考答案',
+    icon: '✅',
+    required: true,
+    placeholder: `粘贴第 ${index} 题参考答案...`,
+  }));
+  fields.appendChild(createInputCard({
+    id: getQuestionFieldId(index, 'student'),
+    title: '学生作答',
+    icon: '✏️',
+    required: true,
+    placeholder: `粘贴第 ${index} 题学生作答...`,
+  }));
+
+  group.querySelector('.question-group__remove').addEventListener('click', () => {
+    clearInputCard(getQuestionFieldId(index, 'question'));
+    clearInputCard(getQuestionFieldId(index, 'reference'));
+    clearInputCard(getQuestionFieldId(index, 'student'));
+    group.remove();
+    renumberQuestionGroups(listEl);
+    const addBtn = document.querySelector('#add-question-group-btn');
+    updateQuestionGroupControls(listEl, addBtn);
+  });
+
+  listEl.appendChild(group);
+}
+
+function updateQuestionGroupControls(listEl, addBtn) {
+  const groups = [...listEl.querySelectorAll('.question-group')];
+  groups.forEach((group, idx) => {
+    const removeBtn = group.querySelector('.question-group__remove');
+    if (removeBtn) removeBtn.style.display = groups.length > 1 && idx === groups.length - 1 ? '' : 'none';
+  });
+  if (addBtn) {
+    addBtn.disabled = groups.length >= MAX_QUESTION_GROUPS;
+  }
+}
+
+function renumberQuestionGroups(listEl) {
+  const groups = [...listEl.querySelectorAll('.question-group')];
+  groups.forEach((group, idx) => {
+    const number = idx + 1;
+    group.dataset.index = String(number);
+    const title = group.querySelector('.question-group__title');
+    if (title) title.textContent = `第 ${number} 题`;
+  });
+}
+
+function collectQuestionGroups() {
+  return [...document.querySelectorAll('.question-group')].map(group => {
+    const index = parseInt(group.dataset.index, 10);
+    return {
+      index,
+      questionData: getInputCardData(getQuestionFieldId(index, 'question')),
+      referenceData: getInputCardData(getQuestionFieldId(index, 'reference')),
+      studentData: getInputCardData(getQuestionFieldId(index, 'student')),
+    };
+  });
+}
+
+function getQuestionFieldId(index, field) {
+  return `q${index}-${field}`;
+}
+
+function hasInput(data) {
+  return data.mode === 'text' ? data.text.length > 0 : data.images.length > 0;
+}
+
+function updateUsageLabels() {
+  const stdEl = document.querySelector('#std-remaining');
+  const deepEl = document.querySelector('#deep-remaining');
+  if (stdEl) stdEl.textContent = `剩余 ${getRemaining('standard')}/${getLimit('standard')}`;
+  if (deepEl) deepEl.textContent = `剩余 ${getRemaining('deep')}/${getLimit('deep')}`;
 }

@@ -102,7 +102,11 @@ function createHistoryItem(record) {
   const iconClass = isDeep ? 'history-item__icon--deep' : 'history-item__icon--standard';
   const iconEmoji = isDeep ? '✨' : '⚡';
   const modeText = isDeep ? '深度分析' : '标准分析';
-  const questionPreview = truncate(record.inputs?.question || '(无题目)', 40);
+  const questionCount = Array.isArray(record.questions) ? record.questions.length : 0;
+  const questionPreview = questionCount > 1
+    ? `批量分析 ${questionCount} 题`
+    : truncate(record.inputs?.question || '(无题目)', 40);
+  const typeText = questionCount > 1 ? '多题批量' : (record.questionType || '未知题型');
   const time = formatDateTime(new Date(record.timestamp));
 
   item.innerHTML = `
@@ -110,7 +114,7 @@ function createHistoryItem(record) {
     <div class="history-item__content">
       <div class="history-item__title">${escapeHtml(questionPreview)}</div>
       <div class="history-item__meta">
-        <span>${escapeHtml(record.questionType || '未知题型')}</span>
+        <span>${escapeHtml(typeText)}</span>
         <span>${modeText}</span>
         <span>${time}</span>
       </div>
