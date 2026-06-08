@@ -7,7 +7,7 @@ import { createInputCard, getInputCardData, clearInputCard } from '../components
 import { renderResults, clearResults } from '../components/result-view.js';
 import { showOcrPreview } from '../components/ocr-preview.js';
 import { Toast } from '../components/toast.js';
-import { getQuestionType } from '../data/question-types.js';
+import { getAllTypeNames, getQuestionType } from '../data/question-types.js';
 import { buildSystemPrompt, buildUserContent } from '../utils/prompt-builder.js';
 import { generateId } from '../utils/helpers.js';
 import { matchQuestionType } from '../utils/type-matcher.js';
@@ -273,7 +273,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
         trackAction('cache_hit', { mode, groupIndex: item.index });
       } else {
         const match = matchQuestionType(item.questionText);
-        const resolvedType = match.type;
+        const resolvedType = item.selectedType === 'auto' ? match.type : item.selectedType;
         const typeKnowledge = resolvedType ? getQuestionType(resolvedType) : null;
         const systemPrompt = buildSystemPrompt(typeKnowledge);
         const userContent = buildUserContent({
@@ -380,13 +380,23 @@ function addQuestionGroup(listEl, index) {
   const group = document.createElement('section');
   group.className = 'question-group';
   group.dataset.index = String(index);
+  const typeOptions = buildTypeOptionsHtml();
   group.innerHTML = `
     <div class="question-group__header">
       <div>
         <div class="question-group__eyebrow">题组</div>
         <h3 class="question-group__title">第 ${index} 题</h3>
       </div>
-      <button class="btn btn--ghost btn--sm question-group__remove" type="button">删除</button>
+      <div class="question-group__tools">
+        <label class="question-group__type">
+          <span>题型</span>
+          <select class="form-input question-group__type-select">
+            <option value="auto">自动识别</option>
+            ${typeOptions}
+          </select>
+        </label>
+        <button class="btn btn--ghost btn--sm question-group__remove" type="button">删除</button>
+      </div>
     </div>
     <div class="question-group__fields"></div>
   `;
@@ -512,6 +522,7 @@ function collectQuestionGroups() {
     const index = parseInt(group.dataset.index, 10);
     return {
       index,
+      selectedType: group.querySelector('.question-group__type-select')?.value || 'auto',
       questionData: getInputCardData(getQuestionFieldId(index, 'question')),
       referenceData: getInputCardData(getQuestionFieldId(index, 'reference')),
       studentData: [...group.querySelectorAll('.student-answer')].map(answerEl => getInputCardData(answerEl.dataset.inputId)),
@@ -525,6 +536,25 @@ function getQuestionFieldId(index, field) {
 
 function getStudentFieldId(questionIndex, answerIndex) {
   return `q${questionIndex}-student-${answerIndex}`;
+}
+
+function buildTypeOptionsHtml() {
+  return getAllTypeNames()
+    .map(type => `<option value="${escapeAttribute(type)}">${escapeHtmlText(type)}</option>`)
+    .join('');
+}
+
+function escapeHtmlText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeAttribute(value) {
+  return escapeHtmlText(value)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function hasInput(data) {
