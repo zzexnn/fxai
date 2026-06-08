@@ -7,6 +7,18 @@ import { readFileAsDataURL, compressImage } from '../utils/helpers.js';
 
 const OCR_ENDPOINT = `${import.meta.env.BASE_URL}api/ocr`.replace(/\/+$/, '');
 
+function formatApiError(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  if (error.code) return `${error.code}${error.param ? ` (${error.param})` : ''}`;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 /**
  * 对单张图片进行 OCR 识别
  * @param {string} dataURL - 图片的 dataURL
@@ -32,7 +44,7 @@ async function ocrSingleImage(dataURL) {
     let errMsg = `OCR 请求失败: ${res.status}`;
     try {
       const errJson = JSON.parse(errBody);
-      errMsg = errJson.error || errMsg;
+      errMsg = formatApiError(errJson.error) || errJson.message || errMsg;
     } catch {
       if (errBody) errMsg += ` - ${errBody.slice(0, 200)}`;
     }

@@ -48,6 +48,29 @@ const DASHSCOPE_KEY = process.env.DASHSCOPE_API_KEY || '';
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '';
 const DASHSCOPE_ENDPOINT = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const ANALYZE_TIMEOUT_MS = 55_000;
+
+function formatApiError(error, fallback = 'API 请求失败') {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  if (error.code) return `${error.code}${error.param ? ` (${error.param})` : ''}`;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+async function readJsonOrText(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text.slice(0, 500) };
+  }
+}
 
 // ==========================================
 // 监测与安全策略
@@ -228,9 +251,11 @@ app.post('/api/ocr', async (req, res) => {
       }),
     });
 
-    const data = await response.json();
+    const data = await readJsonOrText(response);
     if (!response.ok) {
-      return res.status(response.status).json(data);
+      return res.status(response.status).json({
+        error: formatApiError(data.error || data.message, `OCR 请求失败: ${response.status}`),
+      });
     }
     res.json(data);
   } catch (err) {
@@ -261,6 +286,16 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   const startTime = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
+  const requestBody = { model, messages, temperature, max_tokens: 4000 };
+
+  if (model.startsWith('deepseek/')) {
+    requestBody.reasoning = {
+      effort: 'none',
+      exclude: true,
+    };
+  }
 
   try {
     const response = await fetch(OPENROUTER_ENDPOINT, {
@@ -270,13 +305,15 @@ app.post('/api/analyze', async (req, res) => {
         'Authorization': `Bearer ${OPENROUTER_KEY}`,
         'X-Title': 'ReadingDiagnosis',
       },
-      body: JSON.stringify({ model, messages, temperature }),
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
     });
 
-    const data = await response.json();
+    const data = await readJsonOrText(response);
     const duration = Date.now() - startTime;
 
     if (!response.ok) {
+      const errorMessage = formatApiError(data.error || data.message, `分析请求失败: ${response.status}`);
       writeTelemetryLog({
         timestamp: new Date().toISOString(),
         type: 'api_performance',
@@ -285,10 +322,10 @@ app.post('/api/analyze', async (req, res) => {
         api: '/api/analyze',
         duration_ms: duration,
         status: 'failed',
-        error: data.error?.message || 'API 请求失败',
+        error: errorMessage,
         model
       });
-      return res.status(response.status).json(data);
+      return res.status(response.status).json({ error: errorMessage });
     }
 
     // 统计输入字符数
@@ -310,6 +347,10 @@ app.post('/api/analyze', async (req, res) => {
     res.json(data);
   } catch (err) {
     const duration = Date.now() - startTime;
+    const isTimeout = err.name === 'AbortError';
+    const errorMessage = isTimeout
+      ? `分析请求超时（超过 ${Math.round(ANALYZE_TIMEOUT_MS / 1000)} 秒）。建议减少同题学生作答数量、压缩文章长度，或稍后重试。`
+      : `分析请求失败: ${err.message}`;
     writeTelemetryLog({
       timestamp: new Date().toISOString(),
       type: 'api_performance',
@@ -318,11 +359,13 @@ app.post('/api/analyze', async (req, res) => {
       api: '/api/analyze',
       duration_ms: duration,
       status: 'failed',
-      error: err.message,
+      error: errorMessage,
       model
     });
     console.error('分析代理错误:', err);
-    res.status(500).json({ error: `分析请求失败: ${err.message}` });
+    res.status(isTimeout ? 504 : 500).json({ error: errorMessage });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 

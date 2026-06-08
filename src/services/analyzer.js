@@ -10,6 +10,18 @@ const MODELS = {
   standard: 'deepseek/deepseek-v4-pro',
 };
 
+function formatApiError(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  if (error.code) return `${error.code}${error.param ? ` (${error.param})` : ''}`;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 /**
  * 从模型返回的文本中提取 JSON
  * @param {string} text - 模型返回的原始文本
@@ -80,8 +92,15 @@ export async function analyzeAnswers({ systemPrompt, userContent, mode, fingerpr
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `分析请求失败: ${res.status}`);
+    const body = await res.text().catch(() => '');
+    let message = `分析请求失败: ${res.status}`;
+    try {
+      const err = JSON.parse(body);
+      message = formatApiError(err.error) || err.message || message;
+    } catch {
+      if (body) message += ` - ${body.slice(0, 200)}`;
+    }
+    throw new Error(message);
   }
 
   const data = await res.json();
