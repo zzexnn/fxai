@@ -142,11 +142,12 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
   }
 
   const invalidGroup = rawGroups.find(group => {
-    return !hasInput(group.questionData) || !hasInput(group.referenceData) || !hasInput(group.studentData);
+    const hasStudentAnswer = group.studentData.some(student => hasInput(student));
+    return !hasInput(group.questionData) || !hasInput(group.referenceData) || !hasStudentAnswer;
   });
   if (invalidGroup) {
     trackAction('validation_failed', { reason: 'incomplete_question_group', groupIndex: invalidGroup.index });
-    Toast.show(`请补全第 ${invalidGroup.index} 题的题目、参考答案和学生作答`, 'warning');
+    Toast.show(`请补全第 ${invalidGroup.index} 题的题目、参考答案，并至少填写一份学生作答`, 'warning');
     return;
   }
 
@@ -165,7 +166,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
       index: group.index,
       questionText: group.questionData.mode === 'text' ? group.questionData.text : '',
       referenceText: group.referenceData.mode === 'text' ? group.referenceData.text : '',
-      studentText: group.studentData.mode === 'text' ? group.studentData.text : '',
+      studentTexts: group.studentData.map(student => student.mode === 'text' ? student.text : ''),
     }));
 
     rawGroups.forEach(group => {
@@ -175,9 +176,15 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
       if (group.referenceData.mode === 'image' && group.referenceData.images.length > 0) {
         ocrTasks.push({ label: `第${group.index}题 - 参考答案`, images: group.referenceData.images, field: `reference-${group.index}` });
       }
-      if (group.studentData.mode === 'image' && group.studentData.images.length > 0) {
-        ocrTasks.push({ label: `第${group.index}题 - 学生作答`, images: group.studentData.images, field: `student-${group.index}` });
-      }
+      group.studentData.forEach((student, studentIdx) => {
+        if (student.mode === 'image' && student.images.length > 0) {
+          ocrTasks.push({
+            label: `第${group.index}题 - 学生作答${studentIdx + 1}`,
+            images: student.images,
+            field: `student-${group.index}-${studentIdx}`,
+          });
+        }
+      });
     });
 
     let articleText = articleData.mode === 'text' ? articleData.text : '';
@@ -205,13 +212,16 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
       confirmed.forEach(item => {
         if (item.field === 'article') articleText = item.text;
         else {
-          const [field, indexText] = item.field.split('-');
+          const [field, indexText, studentIndexText] = item.field.split('-');
           const index = parseInt(indexText, 10);
           const target = questionItems.find(q => q.index === index);
           if (!target) return;
           if (field === 'question') target.questionText = item.text;
           if (field === 'reference') target.referenceText = item.text;
-          if (field === 'student') target.studentText = item.text;
+          if (field === 'student') {
+            const studentIndex = parseInt(studentIndexText, 10);
+            if (!Number.isNaN(studentIndex)) target.studentTexts[studentIndex] = item.text;
+          }
         }
       });
     }
@@ -221,7 +231,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
         question: item.questionText.trim(),
         article: articleText,
         referenceAnswer: item.referenceText.trim(),
-        studentAnswers: [item.studentText.trim()].filter(t => t.length > 0),
+        studentAnswers: item.studentTexts.map(text => text.trim()).filter(t => t.length > 0),
       };
       const cachedRecord = findCachedResult(inputPayload);
       return { ...item, inputPayload, cachedRecord };
@@ -396,18 +406,33 @@ function addQuestionGroup(listEl, index) {
     required: true,
     placeholder: `粘贴第 ${index} 题参考答案...`,
   }));
-  fields.appendChild(createInputCard({
-    id: getQuestionFieldId(index, 'student'),
-    title: '学生作答',
-    icon: '✏️',
-    required: true,
-    placeholder: `粘贴第 ${index} 题学生作答...`,
-  }));
+
+  const studentColumn = document.createElement('div');
+  studentColumn.className = 'student-answer-stack';
+  studentColumn.dataset.nextStudentIndex = '1';
+  studentColumn.innerHTML = `
+    <div class="student-answer-stack__header">
+      <div>
+        <div class="student-answer-stack__label">学生作答</div>
+        <div class="student-answer-stack__meta">同一道题可添加多份答卷</div>
+      </div>
+      <button class="btn btn--secondary btn--sm student-answer-stack__add" type="button">＋ 添加</button>
+    </div>
+    <div class="student-answer-stack__list"></div>
+  `;
+  fields.appendChild(studentColumn);
+
+  const studentList = studentColumn.querySelector('.student-answer-stack__list');
+  const addStudentBtn = studentColumn.querySelector('.student-answer-stack__add');
+  addStudentAnswer(studentList, index);
+  addStudentBtn.addEventListener('click', () => addStudentAnswer(studentList, index));
 
   group.querySelector('.question-group__remove').addEventListener('click', () => {
     clearInputCard(getQuestionFieldId(index, 'question'));
     clearInputCard(getQuestionFieldId(index, 'reference'));
-    clearInputCard(getQuestionFieldId(index, 'student'));
+    group.querySelectorAll('.student-answer').forEach(answerEl => {
+      clearInputCard(answerEl.dataset.inputId);
+    });
     group.remove();
     renumberQuestionGroups(listEl);
     const addBtn = document.querySelector('#add-question-group-btn');
@@ -415,6 +440,50 @@ function addQuestionGroup(listEl, index) {
   });
 
   listEl.appendChild(group);
+}
+
+function addStudentAnswer(listEl, questionIndex) {
+  const stack = listEl.closest('.student-answer-stack');
+  const answerIndex = parseInt(stack.dataset.nextStudentIndex || '1', 10);
+  stack.dataset.nextStudentIndex = String(answerIndex + 1);
+
+  const inputId = getStudentFieldId(questionIndex, answerIndex);
+  const answerEl = document.createElement('div');
+  answerEl.className = 'student-answer';
+  answerEl.dataset.inputId = inputId;
+  answerEl.appendChild(createInputCard({
+    id: inputId,
+    title: `学生作答 ${answerIndex}`,
+    icon: '✏️',
+    required: true,
+    placeholder: `粘贴第 ${questionIndex} 题学生作答 ${answerIndex}...`,
+  }));
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'btn btn--ghost btn--sm student-answer__remove';
+  removeBtn.type = 'button';
+  removeBtn.textContent = '删除此作答';
+  removeBtn.addEventListener('click', () => {
+    clearInputCard(inputId);
+    answerEl.remove();
+    updateStudentAnswerControls(listEl);
+  });
+  answerEl.appendChild(removeBtn);
+
+  listEl.appendChild(answerEl);
+  updateStudentAnswerControls(listEl);
+}
+
+function updateStudentAnswerControls(listEl) {
+  const answers = [...listEl.querySelectorAll('.student-answer')];
+  answers.forEach((answerEl, idx) => {
+    const title = answerEl.querySelector('.card__title');
+    if (title) {
+      title.innerHTML = `<span class="card__title-icon">✏️</span>学生作答 ${idx + 1}`;
+    }
+    const removeBtn = answerEl.querySelector('.student-answer__remove');
+    if (removeBtn) removeBtn.style.display = answers.length > 1 ? '' : 'none';
+  });
 }
 
 function updateQuestionGroupControls(listEl, addBtn) {
@@ -445,13 +514,17 @@ function collectQuestionGroups() {
       index,
       questionData: getInputCardData(getQuestionFieldId(index, 'question')),
       referenceData: getInputCardData(getQuestionFieldId(index, 'reference')),
-      studentData: getInputCardData(getQuestionFieldId(index, 'student')),
+      studentData: [...group.querySelectorAll('.student-answer')].map(answerEl => getInputCardData(answerEl.dataset.inputId)),
     };
   });
 }
 
 function getQuestionFieldId(index, field) {
   return `q${index}-${field}`;
+}
+
+function getStudentFieldId(questionIndex, answerIndex) {
+  return `q${questionIndex}-student-${answerIndex}`;
 }
 
 function hasInput(data) {

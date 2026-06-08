@@ -151,6 +151,14 @@ export function createInputCard({ id, title, icon, required = false, placeholder
     cameraInput.value = '';
   });
 
+  imageGrid.addEventListener('click', (e) => {
+    const removeBtn = e.target.closest('.image-grid__remove');
+    if (!removeBtn) return;
+    const index = parseInt(removeBtn.dataset.index, 10);
+    if (Number.isNaN(index)) return;
+    removeImage(id, index, imageGrid);
+  });
+
   return card;
 }
 
