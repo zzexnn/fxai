@@ -105,6 +105,10 @@ function inputsMatch(recInputs, inputs) {
   if ((recInputs.article || '').trim() !== (inputs.article || '').trim()) return false;
   if ((recInputs.referenceAnswer || '').trim() !== (inputs.referenceAnswer || '').trim()) return false;
 
+  // 分值不同视为不同输入（改了分值需重新评分，不命中旧缓存）
+  const normScore = (v) => (v === 0 ? 0 : (v ?? null));
+  if (normScore(recInputs.totalScore) !== normScore(inputs.totalScore)) return false;
+
   const s1 = recInputs.studentAnswers || [];
   const s2 = inputs.studentAnswers || [];
   if (s1.length !== s2.length) return false;

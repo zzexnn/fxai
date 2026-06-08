@@ -46,6 +46,8 @@ export function renderResults(container, analysisRecord) {
     <span class="badge badge--info">题型: ${escapeHtml(result.题型 || '未知')}</span>
     <span class="badge ${getConfBadgeClass(result.题型置信度)}">置信度: ${escapeHtml(result.题型置信度 || '-')}</span>
     <span class="badge ${getStatusBadgeClass(result.题型状态)}">${escapeHtml(result.题型状态 || '-')}</span>
+    ${result.满分 != null ? `<span class="badge badge--accent">满分: ${escapeHtml(String(result.满分))}</span>` : ''}
+    ${result.给分标准来源 ? `<span class="badge badge--neutral">给分: ${escapeHtml(result.给分标准来源)}</span>` : ''}
     <span class="badge badge--neutral">${escapeHtml(result.内容核实范围 || '-')}</span>
   `;
   section.appendChild(typeInfo);
@@ -53,9 +55,14 @@ export function renderResults(container, analysisRecord) {
   // 个体诊断
   const diagnoses = result.个体诊断 || [];
   diagnoses.forEach(diag => {
-    const card = createDiagnosisCard(diag);
+    const card = createDiagnosisCard(diag, result.满分);
     section.appendChild(card);
   });
+
+  // 群体得分概况
+  if (result.群体得分概况) {
+    section.appendChild(createScoreOverview(result.群体得分概况));
+  }
 
   // 群体汇总
   const summary = result.群体汇总;
@@ -126,6 +133,8 @@ function createQuestionResultBlock(questionRecord) {
         ${cacheBadge}
         <span class="badge ${getConfBadgeClass(result.题型置信度)}">置信度: ${escapeHtml(result.题型置信度 || '-')}</span>
         <span class="badge ${getStatusBadgeClass(result.题型状态)}">${escapeHtml(result.题型状态 || '-')}</span>
+        ${result.满分 != null ? `<span class="badge badge--accent">满分: ${escapeHtml(String(result.满分))}</span>` : ''}
+        ${result.给分标准来源 ? `<span class="badge badge--neutral">给分: ${escapeHtml(result.给分标准来源)}</span>` : ''}
       </div>
     </div>
     <div class="question-result__inputs">
@@ -146,8 +155,12 @@ function createQuestionResultBlock(questionRecord) {
 
   const diagnoses = result.个体诊断 || [];
   diagnoses.forEach(diag => {
-    block.appendChild(createDiagnosisCard(diag));
+    block.appendChild(createDiagnosisCard(diag, result.满分));
   });
+
+  if (result.群体得分概况) {
+    block.appendChild(createScoreOverview(result.群体得分概况));
+  }
 
   const summary = result.群体汇总;
   if (summary && summary.length > 0) {
@@ -159,15 +172,27 @@ function createQuestionResultBlock(questionRecord) {
 
 /**
  * 创建单个学生诊断卡片
+ * @param {object} diag - 个体诊断对象
+ * @param {number} [fullScore] - 本题满分（来自 result.满分）
  */
-function createDiagnosisCard(diag) {
+function createDiagnosisCard(diag, fullScore) {
   const card = document.createElement('div');
   card.className = 'result-card';
+
+  // 得分徽标
+  const hasScore = diag.得分 != null;
+  const max = fullScore != null ? fullScore : null;
+  let scoreBadge = '';
+  if (hasScore) {
+    const scoreText = max != null ? `${diag.得分} / ${max}` : `${diag.得分}`;
+    scoreBadge = `<span class="badge badge--accent result-card__score">得分: ${escapeHtml(scoreText)}</span>`;
+  }
 
   // 头部
   const headerHtml = `
     <div class="result-card__header">
       <span class="result-card__student">${escapeHtml(diag.学生标识 || '学生')}</span>
+      ${scoreBadge}
       ${diag.无失分 ? '<span class="badge badge--success">✓ 无失分</span>' : ''}
     </div>
   `;
@@ -177,6 +202,46 @@ function createDiagnosisCard(diag) {
     <div class="result-card__original-label">识别原文</div>
     <div class="result-card__original">${escapeHtml(diag.识别原文 || '无')}</div>
   `;
+
+  // 得分要点明细
+  let scorePointsHtml = '';
+  const scorePoints = diag.得分要点 || [];
+  if (scorePoints.length > 0) {
+    const rows = scorePoints.map(p => {
+      const verdict = p.判定 || '';
+      const verdictClass = verdict === '答到' ? 'badge--success'
+        : verdict === '部分答到' ? 'badge--warning'
+        : 'badge--danger';
+      const gained = p.实得分 ?? '';
+      const full = p.应得分 ?? '';
+      return `
+        <tr>
+          <td>${escapeHtml(p.要点 || p.类别 || '')}</td>
+          <td style="text-align:center;">${escapeHtml(String(gained))} / ${escapeHtml(String(full))}</td>
+          <td style="text-align:center;"><span class="badge ${verdictClass}">${escapeHtml(verdict || '-')}</span></td>
+          <td>${escapeHtml(p.说明 || '')}</td>
+        </tr>
+      `;
+    }).join('');
+    scorePointsHtml = `
+      <div class="score-points">
+        <div class="score-points__title">📝 得分要点</div>
+        <div class="table-wrapper">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>要点</th>
+                <th style="text-align:center;">实得/应得</th>
+                <th style="text-align:center;">判定</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
 
   // 失分点
   let lossPointsHtml = '';
@@ -198,8 +263,36 @@ function createDiagnosisCard(diag) {
     `).join('');
   }
 
-  card.innerHTML = headerHtml + originalHtml + lossPointsHtml;
+  card.innerHTML = headerHtml + originalHtml + scorePointsHtml + lossPointsHtml;
   return card;
+}
+
+/**
+ * 创建群体得分概况
+ * @param {object} overview - { 平均分, 最高分, 最低分, 满分 }
+ */
+function createScoreOverview(overview) {
+  const section = document.createElement('div');
+  section.className = 'summary-section score-overview';
+
+  const cell = (label, value) => `
+    <div class="score-overview__cell">
+      <div class="score-overview__value">${escapeHtml(String(value ?? '-'))}</div>
+      <div class="score-overview__label">${escapeHtml(label)}</div>
+    </div>
+  `;
+
+  section.innerHTML = `
+    <div class="summary-section__title">🎯 群体得分概况</div>
+    <div class="score-overview__grid" style="display:flex; flex-wrap:wrap; gap:var(--space-3);">
+      ${cell('平均分', overview.平均分)}
+      ${cell('最高分', overview.最高分)}
+      ${cell('最低分', overview.最低分)}
+      ${cell('满分', overview.满分)}
+    </div>
+  `;
+
+  return section;
 }
 
 /**

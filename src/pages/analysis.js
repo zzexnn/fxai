@@ -164,6 +164,8 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
 
     const questionItems = rawGroups.map(group => ({
       index: group.index,
+      selectedType: group.selectedType,
+      totalScore: group.totalScore,
       questionText: group.questionData.mode === 'text' ? group.questionData.text : '',
       referenceText: group.referenceData.mode === 'text' ? group.referenceData.text : '',
       studentTexts: group.studentData.map(student => student.mode === 'text' ? student.text : ''),
@@ -231,6 +233,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
         question: item.questionText.trim(),
         article: articleText,
         referenceAnswer: item.referenceText.trim(),
+        totalScore: item.totalScore ?? null,
         studentAnswers: item.studentTexts.map(text => text.trim()).filter(t => t.length > 0),
       };
       const cachedRecord = findCachedResult(inputPayload);
@@ -281,6 +284,7 @@ async function handleSubmit(mode, resultContainer, submitBtn) {
           article: articleText,
           referenceAnswer: item.referenceText,
           studentAnswers: item.inputPayload.studentAnswers,
+          totalScore: item.totalScore,
         });
 
         Toast.show(`正在分析第 ${item.index} 题（${i + 1}/${preparedItems.length}）...`, 'info');
@@ -395,6 +399,10 @@ function addQuestionGroup(listEl, index) {
             ${typeOptions}
           </select>
         </label>
+        <label class="question-group__type question-group__score">
+          <span>分值</span>
+          <input type="number" class="form-input question-group__score-input" min="0" step="0.5" placeholder="选填" />
+        </label>
         <button class="btn btn--ghost btn--sm question-group__remove" type="button">删除</button>
       </div>
     </div>
@@ -414,7 +422,7 @@ function addQuestionGroup(listEl, index) {
     title: '参考答案',
     icon: '✅',
     required: true,
-    placeholder: `粘贴第 ${index} 题参考答案...`,
+    placeholder: `粘贴第 ${index} 题参考答案...（可标注各要点分值，如：表层含义(2分)）`,
   }));
 
   const studentColumn = document.createElement('div');
@@ -520,9 +528,12 @@ function renumberQuestionGroups(listEl) {
 function collectQuestionGroups() {
   return [...document.querySelectorAll('.question-group')].map(group => {
     const index = parseInt(group.dataset.index, 10);
+    const scoreRaw = group.querySelector('.question-group__score-input')?.value?.trim() || '';
+    const scoreNum = scoreRaw === '' ? null : Number(scoreRaw);
     return {
       index,
       selectedType: group.querySelector('.question-group__type-select')?.value || 'auto',
+      totalScore: Number.isFinite(scoreNum) && scoreNum >= 0 ? scoreNum : null,
       questionData: getInputCardData(getQuestionFieldId(index, 'question')),
       referenceData: getInputCardData(getQuestionFieldId(index, 'reference')),
       studentData: [...group.querySelectorAll('.student-answer')].map(answerEl => getInputCardData(answerEl.dataset.inputId)),

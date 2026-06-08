@@ -6,6 +6,18 @@
 import { formatDateTime, escapeHtml } from './helpers.js';
 
 /**
+ * 生成学生得分文本（得分 / 满分）
+ * @param {object} student - 个体诊断对象
+ * @param {number} [fullScore] - 本题满分
+ * @returns {string}
+ */
+function formatStudentScore(student, fullScore) {
+  if (student.得分 == null) return '';
+  const text = fullScore != null ? `${student.得分} / ${fullScore}` : `${student.得分}`;
+  return `<span style="color:#1a237e;font-weight:bold;margin-left:8px;">得分：${escapeHtml(text)}</span>`;
+}
+
+/**
  * 生成失分点表格 HTML
  * @param {Array} failPoints - 失分点数组
  * @returns {string}
@@ -109,7 +121,7 @@ export function exportAsPrint(analysisRecord) {
     for (const student of r.个体诊断) {
       individualHtml += `
         <div class="student-card">
-          <h3>${escapeHtml(student.学生标识 || '未知')}</h3>
+          <h3>${escapeHtml(student.学生标识 || '未知')}${formatStudentScore(student, r.满分)}</h3>
           <div class="field">
             <span class="label">识别原文：</span>
             <span>${escapeHtml(student.识别原文 || '')}</span>
@@ -180,6 +192,8 @@ export function exportAsPrint(analysisRecord) {
     <span class="label">题型：</span><span>${escapeHtml(r.题型 || questionType || '')}</span>
     <span class="label">题型置信度：</span><span>${escapeHtml(r.题型置信度 || '')}</span>
     <span class="label">题型状态：</span><span>${escapeHtml(r.题型状态 || '')}</span>
+    ${r.满分 != null ? `<span class="label">本题满分：</span><span>${escapeHtml(String(r.满分))}</span>` : ''}
+    ${r.给分标准来源 ? `<span class="label">给分标准来源：</span><span>${escapeHtml(r.给分标准来源)}</span>` : ''}
     <span class="label">内容核实范围：</span><span>${escapeHtml(r.内容核实范围 || '')}</span>
   </div>
 
@@ -211,7 +225,7 @@ function exportBatchAsPrint(analysisRecord) {
       for (const student of r.个体诊断) {
         individualHtml += `
           <div class="student-card">
-            <h4>${escapeHtml(student.学生标识 || '学生')}</h4>
+            <h4>${escapeHtml(student.学生标识 || '学生')}${formatStudentScore(student, r.满分)}</h4>
             <div class="field">
               <span class="label">识别原文：</span>
               <span>${escapeHtml(student.识别原文 || '')}</span>
@@ -232,6 +246,8 @@ function exportBatchAsPrint(analysisRecord) {
           <span class="label">学生作答：</span><span>${escapeHtml((question.inputs?.studentAnswers || []).join('\n\n'))}</span>
           <span class="label">题型置信度：</span><span>${escapeHtml(r.题型置信度 || '')}</span>
           <span class="label">题型状态：</span><span>${escapeHtml(r.题型状态 || '')}</span>
+          ${r.满分 != null ? `<span class="label">本题满分：</span><span>${escapeHtml(String(r.满分))}</span>` : ''}
+          ${r.给分标准来源 ? `<span class="label">给分标准来源：</span><span>${escapeHtml(r.给分标准来源)}</span>` : ''}
         </div>
         ${individualHtml || '<p>暂无个体诊断数据</p>'}
         ${buildGroupSummaryTable(r.群体汇总)}
