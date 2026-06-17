@@ -8,6 +8,7 @@ import express from 'express';
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +38,7 @@ app.use(express.json({ limit: '50mb' }));
 // 允许跨域（开发时 Vite 在不同端口）
 app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-password');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (_req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -72,11 +73,163 @@ async function readJsonOrText(response) {
   }
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function clientIp(req) {
+  return req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+}
+
+function sanitizeUserAgent(value = '') {
+  return String(value).slice(0, 300);
+}
+
+function createToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash = '') {
+  const [salt, key] = storedHash.split(':');
+  if (!salt || !key) return false;
+  const candidate = crypto.scryptSync(password, salt, 64);
+  const stored = Buffer.from(key, 'hex');
+  return stored.length === candidate.length && crypto.timingSafeEqual(stored, candidate);
+}
+
+function createEmptyAuthStore() {
+  return {
+    users: [],
+    sessions: [],
+    loginEvents: [],
+  };
+}
+
+function readAuthStore() {
+  try {
+    if (!existsSync(AUTH_STORE_FILE)) return createEmptyAuthStore();
+    const content = readFileSync(AUTH_STORE_FILE, 'utf-8').trim();
+    if (!content) return createEmptyAuthStore();
+    const store = JSON.parse(content);
+    return {
+      users: Array.isArray(store.users) ? store.users : [],
+      sessions: Array.isArray(store.sessions) ? store.sessions : [],
+      loginEvents: Array.isArray(store.loginEvents) ? store.loginEvents : [],
+    };
+  } catch (err) {
+    console.error('[Auth] 读取鉴权数据失败:', err);
+    return createEmptyAuthStore();
+  }
+}
+
+function writeAuthStore(store) {
+  const normalized = {
+    users: store.users || [],
+    sessions: (store.sessions || []).slice(-1000),
+    loginEvents: (store.loginEvents || []).slice(-1000),
+  };
+  writeFileSync(AUTH_STORE_FILE, JSON.stringify(normalized, null, 2), 'utf-8');
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName || user.username,
+    role: user.role || 'user',
+    active: user.active !== false,
+    createdAt: user.createdAt,
+    lastLoginAt: user.lastLoginAt || '',
+  };
+}
+
+function publicSession(session) {
+  return {
+    id: session.id,
+    userId: session.userId,
+    username: session.username,
+    loginAt: session.loginAt,
+    lastSeenAt: session.lastSeenAt,
+    ip: session.ip,
+    userAgent: session.userAgent,
+    active: session.active !== false,
+  };
+}
+
+function ensureBootstrapAdmin() {
+  const username = process.env.BOOTSTRAP_ADMIN_USER || '';
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
+  if (!username || !password) return;
+
+  const store = readAuthStore();
+  const exists = store.users.some(user => user.username === username);
+  if (exists) return;
+
+  const user = {
+    id: createToken(10),
+    username,
+    displayName: username,
+    role: 'admin',
+    active: true,
+    passwordHash: hashPassword(password),
+    createdAt: nowIso(),
+    createdBy: 'bootstrap',
+  };
+  store.users.push(user);
+  writeAuthStore(store);
+  console.log(`   已创建启动管理员账号: ${username}`);
+}
+
+function getBearerToken(req) {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) return '';
+  return authHeader.slice(7).trim();
+}
+
+function authenticate(req, res, next) {
+  const token = getBearerToken(req);
+  if (!token) {
+    return res.status(401).json({ error: '请先登录后再使用' });
+  }
+
+  const store = readAuthStore();
+  const session = store.sessions.find(item => item.token === token && item.active !== false);
+  if (!session) {
+    return res.status(401).json({ error: '登录已失效，请重新登录' });
+  }
+
+  const user = store.users.find(item => item.id === session.userId && item.active !== false);
+  if (!user) {
+    session.active = false;
+    session.logoutAt = nowIso();
+    writeAuthStore(store);
+    return res.status(401).json({ error: '账号不可用，请联系管理员' });
+  }
+
+  session.lastSeenAt = nowIso();
+  session.ip = clientIp(req);
+  writeAuthStore(store);
+
+  req.auth = { user: publicUser(user), session: publicSession(session), token };
+  next();
+}
+
+function verifyAdminPassword(req) {
+  const adminPassword = process.env.ADMIN_PASSWORD || 'fxai@admin';
+  return req.headers['x-admin-password'] === adminPassword;
+}
+
 // ==========================================
 // 监测与安全策略
 // ==========================================
 
 const TELEMETRY_FILE = resolve(__dirname, 'telemetry.json');
+const AUTH_STORE_FILE = resolve(__dirname, 'auth-store.json');
 const LIMITS = {
   deep: 3,
   standard: 10,
@@ -138,11 +291,146 @@ function writeTelemetryLog(log) {
 // API 路由
 // ==========================================
 
+ensureBootstrapAdmin();
+
+// ---- 登录鉴权接口 ----
+app.post('/api/auth/login', (req, res) => {
+  const { username = '', password = '' } = req.body || {};
+  const normalizedUsername = String(username).trim();
+  const ip = clientIp(req);
+  const userAgent = sanitizeUserAgent(req.headers['user-agent'] || '');
+  const store = readAuthStore();
+  const user = store.users.find(item => item.username === normalizedUsername);
+  const eventBase = {
+    id: createToken(8),
+    username: normalizedUsername,
+    ip,
+    userAgent,
+    timestamp: nowIso(),
+  };
+
+  if (!user || user.active === false || !verifyPassword(password, user.passwordHash)) {
+    store.loginEvents.push({
+      ...eventBase,
+      status: 'failed',
+      reason: !user ? 'user_not_found' : user.active === false ? 'inactive_user' : 'bad_password',
+    });
+    writeAuthStore(store);
+    return res.status(401).json({ error: '账号或密码错误' });
+  }
+
+  const session = {
+    id: createToken(10),
+    token: createToken(36),
+    userId: user.id,
+    username: user.username,
+    loginAt: eventBase.timestamp,
+    lastSeenAt: eventBase.timestamp,
+    ip,
+    userAgent,
+    active: true,
+  };
+
+  user.lastLoginAt = eventBase.timestamp;
+  store.sessions.push(session);
+  store.loginEvents.push({
+    ...eventBase,
+    userId: user.id,
+    sessionId: session.id,
+    status: 'success',
+  });
+  writeAuthStore(store);
+
+  res.json({
+    success: true,
+    token: session.token,
+    user: publicUser(user),
+    session: publicSession(session),
+  });
+});
+
+app.get('/api/auth/me', authenticate, (req, res) => {
+  res.json({
+    success: true,
+    user: req.auth.user,
+    session: req.auth.session,
+  });
+});
+
+app.post('/api/auth/logout', authenticate, (req, res) => {
+  const store = readAuthStore();
+  const session = store.sessions.find(item => item.token === req.auth.token);
+  if (session) {
+    session.active = false;
+    session.logoutAt = nowIso();
+    session.lastSeenAt = session.logoutAt;
+    writeAuthStore(store);
+  }
+  res.json({ success: true });
+});
+
+// ---- 管理员账号管理接口 ----
+app.get('/api/admin/users', (req, res) => {
+  if (!verifyAdminPassword(req)) {
+    return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
+  }
+
+  const store = readAuthStore();
+  res.json({
+    success: true,
+    data: {
+      users: store.users.map(publicUser),
+      sessions: store.sessions.slice(-100).reverse().map(publicSession),
+      loginEvents: store.loginEvents.slice(-100).reverse(),
+    },
+  });
+});
+
+app.post('/api/admin/users', (req, res) => {
+  if (!verifyAdminPassword(req)) {
+    return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
+  }
+
+  const { username = '', password = '', displayName = '' } = req.body || {};
+  const normalizedUsername = String(username).trim();
+  const normalizedDisplayName = String(displayName || username).trim();
+
+  if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(normalizedUsername)) {
+    return res.status(400).json({
+      success: false,
+      error: '账号需为 3-32 位，只能包含字母、数字、下划线、点和短横线',
+    });
+  }
+
+  if (String(password).length < 6) {
+    return res.status(400).json({ success: false, error: '密码至少需要 6 位' });
+  }
+
+  const store = readAuthStore();
+  if (store.users.some(user => user.username === normalizedUsername)) {
+    return res.status(409).json({ success: false, error: '账号已存在' });
+  }
+
+  const user = {
+    id: createToken(10),
+    username: normalizedUsername,
+    displayName: normalizedDisplayName || normalizedUsername,
+    role: 'user',
+    active: true,
+    passwordHash: hashPassword(password),
+    createdAt: nowIso(),
+    createdBy: 'admin',
+  };
+  store.users.push(user);
+  writeAuthStore(store);
+
+  res.status(201).json({ success: true, user: publicUser(user) });
+});
+
 // ---- 前端埋点数据接收接口 ----
 app.post('/api/telemetry', (req, res) => {
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   const logEntry = {
-    ip: clientIp,
+    ip: clientIp(req),
     ...req.body,
   };
   writeTelemetryLog(logEntry);
@@ -151,10 +439,7 @@ app.post('/api/telemetry', (req, res) => {
 
 // ---- 获取埋点统计指标接口 ----
 app.get('/api/telemetry/stats', (req, res) => {
-  const adminPassword = process.env.ADMIN_PASSWORD || 'fxai@admin';
-  const reqPassword = req.headers['x-admin-password'];
-
-  if (reqPassword !== adminPassword) {
+  if (!verifyAdminPassword(req)) {
     return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
   }
 
@@ -207,6 +492,8 @@ app.get('/api/telemetry/stats', (req, res) => {
       }
     });
 
+    const authStore = readAuthStore();
+
     res.json({
       success: true,
       data: {
@@ -222,7 +509,12 @@ app.get('/api/telemetry/stats', (req, res) => {
           analyzeCount: totalAnalyzeCount,
           analyzeUv: totalAnalyzeDevices.size
         },
-        recentLogs: logs.slice(-50).reverse()
+        recentLogs: logs.slice(-50).reverse(),
+        auth: {
+          users: authStore.users.map(publicUser),
+          sessions: authStore.sessions.slice(-100).reverse().map(publicSession),
+          loginEvents: authStore.loginEvents.slice(-100).reverse(),
+        },
       }
     });
   } catch (err) {
@@ -232,7 +524,7 @@ app.get('/api/telemetry/stats', (req, res) => {
 });
 
 // ---- OCR 接口 ----
-app.post('/api/ocr', async (req, res) => {
+app.post('/api/ocr', authenticate, async (req, res) => {
   if (!DASHSCOPE_KEY) {
     return res.status(500).json({ error: '服务端未配置百炼 API Key' });
   }
@@ -265,16 +557,16 @@ app.post('/api/ocr', async (req, res) => {
 });
 
 // ---- AI 分析接口 (带指纹拦截与性能监控) ----
-app.post('/api/analyze', async (req, res) => {
+app.post('/api/analyze', authenticate, async (req, res) => {
   if (!OPENROUTER_KEY) {
     return res.status(500).json({ error: '服务端未配置 OpenRouter API Key' });
   }
 
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const requestIp = clientIp(req);
   const { model, messages, temperature, fingerprint } = req.body;
 
   // 使用上传的指纹，若无则使用 IP 作为兜底限额 Key
-  const fp = fingerprint || clientIp;
+  const fp = fingerprint || requestIp;
   const mode = model.includes('claude') ? 'deep' : 'standard';
 
   // 1. 服务端配额拦截
@@ -318,7 +610,8 @@ app.post('/api/analyze', async (req, res) => {
         timestamp: new Date().toISOString(),
         type: 'api_performance',
         fingerprint: fp,
-        ip: clientIp,
+        ip: requestIp,
+        username: req.auth.user.username,
         api: '/api/analyze',
         duration_ms: duration,
         status: 'failed',
@@ -336,7 +629,8 @@ app.post('/api/analyze', async (req, res) => {
       timestamp: new Date().toISOString(),
       type: 'api_performance',
       fingerprint: fp,
-      ip: clientIp,
+      ip: requestIp,
+      username: req.auth.user.username,
       api: '/api/analyze',
       duration_ms: duration,
       status: 'success',
@@ -355,7 +649,8 @@ app.post('/api/analyze', async (req, res) => {
       timestamp: new Date().toISOString(),
       type: 'api_performance',
       fingerprint: fp,
-      ip: clientIp,
+      ip: requestIp,
+      username: req.auth.user.username,
       api: '/api/analyze',
       duration_ms: duration,
       status: 'failed',
@@ -370,7 +665,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ---- 连接测试接口 ----
-app.get('/api/test/ocr', async (_req, res) => {
+app.get('/api/test/ocr', authenticate, async (_req, res) => {
   if (!DASHSCOPE_KEY) {
     return res.json({ success: false, message: '服务端未配置百炼 API Key' });
   }
@@ -398,7 +693,7 @@ app.get('/api/test/ocr', async (_req, res) => {
   }
 });
 
-app.get('/api/test/analyzer', async (_req, res) => {
+app.get('/api/test/analyzer', authenticate, async (_req, res) => {
   if (!OPENROUTER_KEY) {
     return res.json({ success: false, message: '服务端未配置 OpenRouter API Key' });
   }

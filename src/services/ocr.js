@@ -3,6 +3,7 @@
  * 通过后端代理调用百炼 qwen3-vl API
  */
 
+import { fetchWithAuth } from './auth.js';
 import { readFileAsDataURL, compressImage } from '../utils/helpers.js';
 
 const OCR_ENDPOINT = `${import.meta.env.BASE_URL}api/ocr`.replace(/\/+$/, '');
@@ -25,7 +26,7 @@ function formatApiError(error) {
  * @returns {Promise<string>} 识别出的文字
  */
 async function ocrSingleImage(dataURL) {
-  const res = await fetch(OCR_ENDPOINT, {
+  const res = await fetchWithAuth(OCR_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -89,7 +90,7 @@ export async function recognizeImages(files) {
  */
 export async function testOcrConnection() {
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}api/test/ocr`.replace(/\/+$/, ''));
+    const res = await fetchWithAuth(`${import.meta.env.BASE_URL}api/test/ocr`.replace(/\/+$/, ''));
     return await res.json();
   } catch (err) {
     return { success: false, message: `连接错误: ${err.message}` };

@@ -7,6 +7,15 @@ import { Toast } from '../components/toast.js';
 
 let statsContainer = null;
 
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * 格式化 ISO 时间为易读格式
  * @param {string} isoString
@@ -80,6 +89,61 @@ export function renderAdminPage(container) {
     </div>
 
     <!-- 详细日志列表板块 -->
+    <div class="card" style="border:1px solid var(--color-border); border-radius:var(--border-radius-lg); box-shadow:var(--shadow-md); margin-bottom:var(--space-6);">
+      <div class="card__header" style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="card__title">👥 账号与登录记录</div>
+      </div>
+      <div class="card__body">
+        <form id="admin-create-user-form" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:var(--space-3); align-items:end; margin-bottom:var(--space-5);">
+          <div class="form-group">
+            <label class="form-label" for="admin-new-username">账号</label>
+            <input class="form-input" id="admin-new-username" name="username" autocomplete="off" placeholder="teacher01" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="admin-new-display-name">显示名</label>
+            <input class="form-input" id="admin-new-display-name" name="displayName" autocomplete="off" placeholder="王老师" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="admin-new-password">初始密码</label>
+            <input class="form-input" id="admin-new-password" name="password" type="password" autocomplete="new-password" required />
+          </div>
+          <button class="btn btn--primary" type="submit" id="admin-create-user-btn">创建账号</button>
+        </form>
+        <div class="table-wrapper" style="margin-bottom:var(--space-5);">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>账号</th>
+                <th>显示名</th>
+                <th>角色</th>
+                <th>创建时间</th>
+                <th>最近登录</th>
+              </tr>
+            </thead>
+            <tbody id="admin-users-tbody">
+              <tr><td colspan="5" style="text-align:center; color:var(--color-text-secondary);">正在加载账号...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-wrapper">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>账号</th>
+                <th>状态</th>
+                <th>IP 地址</th>
+                <th>设备信息</th>
+              </tr>
+            </thead>
+            <tbody id="admin-logins-tbody">
+              <tr><td colspan="5" style="text-align:center; color:var(--color-text-secondary);">正在加载登录记录...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="card" style="border:1px solid var(--color-border); border-radius:var(--border-radius-lg); box-shadow:var(--shadow-md);">
       <div class="card__header" style="display:flex; justify-content:space-between; align-items:center;">
         <div class="card__title">🕒 实时操作与 APM 性能日志 (最近 50 条)</div>
@@ -89,6 +153,7 @@ export function renderAdminPage(container) {
           <thead>
             <tr style="background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border);">
               <th style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); font-weight:var(--font-semibold);">时间</th>
+              <th style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); font-weight:var(--font-semibold);">账号</th>
               <th style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); font-weight:var(--font-semibold);">设备指纹</th>
               <th style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); font-weight:var(--font-semibold);">类型</th>
               <th style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); font-weight:var(--font-semibold);">操作/路径/耗时</th>
@@ -98,7 +163,7 @@ export function renderAdminPage(container) {
           </thead>
           <tbody id="admin-logs-tbody">
             <tr>
-              <td colspan="6" style="padding:var(--space-6); text-align:center; color:var(--color-text-secondary);">正在加载数据或验证鉴权...</td>
+              <td colspan="7" style="padding:var(--space-6); text-align:center; color:var(--color-text-secondary);">正在加载数据或验证鉴权...</td>
             </tr>
           </tbody>
         </table>
@@ -109,9 +174,55 @@ export function renderAdminPage(container) {
   // 绑定事件
   container.querySelector('#admin-refresh-btn').addEventListener('click', loadAdminData);
   container.querySelector('#admin-logout-btn').addEventListener('click', handleLogout);
+  container.querySelector('#admin-create-user-form').addEventListener('submit', handleCreateUser);
 
   // 触发数据加载（会检查或弹出密码验证）
   loadAdminData();
+}
+
+async function handleCreateUser(event) {
+  event.preventDefault();
+  const pwd = sessionStorage.getItem('admin_password');
+  if (!pwd) {
+    Toast.show('请先完成管理员验证', 'warning');
+    loadAdminData();
+    return;
+  }
+
+  const form = event.currentTarget;
+  const submitBtn = form.querySelector('#admin-create-user-btn');
+  const formData = new FormData(form);
+  const payload = {
+    username: String(formData.get('username') || '').trim(),
+    displayName: String(formData.get('displayName') || '').trim(),
+    password: String(formData.get('password') || ''),
+  };
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = '创建中...';
+
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/admin/users`.replace(/\/+$/, ''), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-password': pwd
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.error || `创建失败: ${res.status}`);
+    }
+    Toast.show(`账号 ${payload.username} 已创建`, 'success');
+    form.reset();
+    loadAdminData();
+  } catch (err) {
+    Toast.show(err.message, 'error');
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = '创建账号';
+  }
 }
 
 /**
@@ -177,7 +288,7 @@ async function loadAdminData() {
     if (tbody) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="6" style="padding:var(--space-6); text-align:center; color:var(--color-error);">
+          <td colspan="7" style="padding:var(--space-6); text-align:center; color:var(--color-error);">
             数据加载失败: ${err.message}
           </td>
         </tr>
@@ -213,6 +324,8 @@ function renderStats(data) {
   if (totalVvEl) totalVvEl.textContent = total.analyzeCount;
   if (totalActiveEl) totalActiveEl.textContent = `使用设备: ${total.analyzeUv}`;
 
+  renderAuthStats(data.auth || {});
+
   // 2. 填充日志列表
   const tbody = document.querySelector('#admin-logs-tbody');
   if (!tbody) return;
@@ -220,7 +333,7 @@ function renderStats(data) {
   if (!recentLogs || recentLogs.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="6" style="padding:var(--space-6); text-align:center; color:var(--color-text-secondary);">
+        <td colspan="7" style="padding:var(--space-6); text-align:center; color:var(--color-text-secondary);">
           暂无任何访问日志
         </td>
       </tr>
@@ -269,16 +382,57 @@ function renderStats(data) {
 
     const fpShort = log.fingerprint ? log.fingerprint.slice(0, 10) + '..' : '未知';
     const clientIp = log.ip || '-';
+    const username = log.username || '-';
+    const detailTitle = detailDesc.replace(/<[^>]*>/g, '');
 
     return `
       <tr style="border-bottom:1px solid var(--color-border); transition:background 0.2s;" onmouseover="this.style.background='var(--color-bg-secondary)'" onmouseout="this.style.background='transparent'">
         <td style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary); white-space:nowrap;">${formatTime(log.timestamp)}</td>
-        <td style="padding:var(--space-3) var(--space-4); font-family:monospace; color:var(--color-text-secondary);" title="${log.fingerprint || ''}">${fpShort}</td>
+        <td style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary);">${escapeHtml(username)}</td>
+        <td style="padding:var(--space-3) var(--space-4); font-family:monospace; color:var(--color-text-secondary);" title="${escapeHtml(log.fingerprint || '')}">${escapeHtml(fpShort)}</td>
         <td style="padding:var(--space-3) var(--space-4);">${typeTag}</td>
         <td style="padding:var(--space-3) var(--space-4);">${actionDesc}</td>
-        <td style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary);">${clientIp}</td>
-        <td style="padding:var(--space-3) var(--space-4); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-text-secondary);" title="${detailDesc.replace(/<[^>]*>/g, '')}">${detailDesc}</td>
+        <td style="padding:var(--space-3) var(--space-4); color:var(--color-text-secondary);">${escapeHtml(clientIp)}</td>
+        <td style="padding:var(--space-3) var(--space-4); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-text-secondary);" title="${escapeHtml(detailTitle)}">${detailDesc}</td>
       </tr>
     `;
   }).join('');
+}
+
+function renderAuthStats(auth) {
+  const usersTbody = document.querySelector('#admin-users-tbody');
+  const loginsTbody = document.querySelector('#admin-logins-tbody');
+
+  if (usersTbody) {
+    const users = auth.users || [];
+    usersTbody.innerHTML = users.length
+      ? users.map(user => `
+          <tr>
+            <td><strong>${escapeHtml(user.username)}</strong></td>
+            <td>${escapeHtml(user.displayName || user.username)}</td>
+            <td><span class="badge ${user.role === 'admin' ? 'badge--accent' : 'badge--neutral'}">${escapeHtml(user.role || 'user')}</span></td>
+            <td>${formatTime(user.createdAt)}</td>
+            <td>${formatTime(user.lastLoginAt)}</td>
+          </tr>
+        `).join('')
+      : '<tr><td colspan="5" style="text-align:center; color:var(--color-text-secondary);">暂无账号</td></tr>';
+  }
+
+  if (loginsTbody) {
+    const loginEvents = auth.loginEvents || [];
+    loginsTbody.innerHTML = loginEvents.length
+      ? loginEvents.map(event => {
+          const success = event.status === 'success';
+          return `
+            <tr>
+              <td>${formatTime(event.timestamp)}</td>
+              <td>${escapeHtml(event.username || '-')}</td>
+              <td><span class="badge ${success ? 'badge--success' : 'badge--danger'}">${success ? '成功' : '失败'}</span></td>
+              <td>${escapeHtml(event.ip || '-')}</td>
+              <td title="${escapeHtml(event.userAgent || '')}" style="max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(event.userAgent || '-')}</td>
+            </tr>
+          `;
+        }).join('')
+      : '<tr><td colspan="5" style="text-align:center; color:var(--color-text-secondary);">暂无登录记录</td></tr>';
+  }
 }

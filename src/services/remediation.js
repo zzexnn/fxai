@@ -3,6 +3,8 @@
  * 复用 /api/analyze 后端接口，只是 Prompt 不同
  */
 
+import { fetchWithAuth } from './auth.js';
+
 const ANALYZE_ENDPOINT = `${import.meta.env.BASE_URL}api/analyze`.replace(/\/+$/, '');
 
 const MODELS = {
@@ -39,7 +41,7 @@ function extractJSON(text) {
 export async function generateVariant({ systemPrompt, userContent, mode }) {
   const model = MODELS[mode] || MODELS.standard;
 
-  const res = await fetch(ANALYZE_ENDPOINT, {
+  const res = await fetchWithAuth(ANALYZE_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -80,7 +82,7 @@ export async function generateVariant({ systemPrompt, userContent, mode }) {
 export async function generateKnowledge({ systemPrompt, userContent, mode }) {
   const model = MODELS[mode] || MODELS.standard;
 
-  const res = await fetch(ANALYZE_ENDPOINT, {
+  const res = await fetchWithAuth(ANALYZE_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

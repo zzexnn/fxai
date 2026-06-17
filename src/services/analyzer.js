@@ -3,6 +3,8 @@
  * 通过后端代理调用 OpenRouter API
  */
 
+import { fetchWithAuth } from './auth.js';
+
 const ANALYZE_ENDPOINT = `${import.meta.env.BASE_URL}api/analyze`.replace(/\/+$/, '');
 
 const MODELS = {
@@ -77,7 +79,7 @@ export async function analyzeAnswers({ systemPrompt, userContent, mode, fingerpr
 
   const model = MODELS[mode] || MODELS.standard;
 
-  const res = await fetch(ANALYZE_ENDPOINT, {
+  const res = await fetchWithAuth(ANALYZE_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -120,7 +122,7 @@ export async function analyzeAnswers({ systemPrompt, userContent, mode, fingerpr
  */
 export async function testAnalyzerConnection() {
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}api/test/analyzer`.replace(/\/+$/, ''));
+    const res = await fetchWithAuth(`${import.meta.env.BASE_URL}api/test/analyzer`.replace(/\/+$/, ''));
     return await res.json();
   } catch (err) {
     return { success: false, message: `连接错误: ${err.message}` };
