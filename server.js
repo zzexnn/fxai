@@ -107,6 +107,7 @@ function createEmptyAuthStore() {
     users: [],
     sessions: [],
     loginEvents: [],
+    accountRequests: [],
   };
 }
 
@@ -120,6 +121,7 @@ function readAuthStore() {
       users: Array.isArray(store.users) ? store.users : [],
       sessions: Array.isArray(store.sessions) ? store.sessions : [],
       loginEvents: Array.isArray(store.loginEvents) ? store.loginEvents : [],
+      accountRequests: Array.isArray(store.accountRequests) ? store.accountRequests : [],
     };
   } catch (err) {
     console.error('[Auth] 读取鉴权数据失败:', err);
@@ -132,6 +134,7 @@ function writeAuthStore(store) {
     users: store.users || [],
     sessions: (store.sessions || []).slice(-1000),
     loginEvents: (store.loginEvents || []).slice(-1000),
+    accountRequests: (store.accountRequests || []).slice(-500),
   };
   writeFileSync(AUTH_STORE_FILE, JSON.stringify(normalized, null, 2), 'utf-8');
 }
@@ -159,6 +162,26 @@ function publicSession(session) {
     userAgent: session.userAgent,
     active: session.active !== false,
   };
+}
+
+function publicAccountRequest(request) {
+  return {
+    id: request.id,
+    username: request.username,
+    organization: request.organization,
+    reason: request.reason,
+    status: request.status || 'pending',
+    createdAt: request.createdAt,
+    reviewedAt: request.reviewedAt || '',
+    reviewedBy: request.reviewedBy || '',
+    userId: request.userId || '',
+    ip: request.ip || '',
+    userAgent: request.userAgent || '',
+  };
+}
+
+function validateUsername(username) {
+  return /^[a-zA-Z0-9]{3,32}$/.test(username);
 }
 
 function ensureBootstrapAdmin() {
@@ -349,6 +372,68 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
+app.post('/api/auth/apply', (req, res) => {
+  const {
+    username = '',
+    password = '',
+    organization = '',
+    reason = '',
+  } = req.body || {};
+  const normalizedUsername = String(username).trim();
+  const normalizedOrganization = String(organization).trim();
+  const normalizedReason = String(reason).trim();
+
+  if (!validateUsername(normalizedUsername)) {
+    return res.status(400).json({
+      success: false,
+      error: '账号需为 3-32 位，只能包含字母和数字',
+    });
+  }
+
+  if (String(password).length < 6) {
+    return res.status(400).json({ success: false, error: '密码至少需要 6 位' });
+  }
+
+  if (normalizedOrganization.length < 2 || normalizedOrganization.length > 80) {
+    return res.status(400).json({ success: false, error: '单位名称需为 2-80 个字符' });
+  }
+
+  if (normalizedReason.length < 4 || normalizedReason.length > 500) {
+    return res.status(400).json({ success: false, error: '申请理由需为 4-500 个字符' });
+  }
+
+  const store = readAuthStore();
+  if (store.users.some(user => user.username === normalizedUsername)) {
+    return res.status(409).json({ success: false, error: '账号已存在，请更换账号名或直接登录' });
+  }
+
+  const existingPending = store.accountRequests.some(request =>
+    request.username === normalizedUsername && request.status === 'pending'
+  );
+  if (existingPending) {
+    return res.status(409).json({ success: false, error: '该账号名已有待审核申请，请等待管理员处理' });
+  }
+
+  const request = {
+    id: createToken(10),
+    username: normalizedUsername,
+    organization: normalizedOrganization,
+    reason: normalizedReason,
+    passwordHash: hashPassword(password),
+    status: 'pending',
+    createdAt: nowIso(),
+    ip: clientIp(req),
+    userAgent: sanitizeUserAgent(req.headers['user-agent'] || ''),
+  };
+  store.accountRequests.push(request);
+  writeAuthStore(store);
+
+  res.status(201).json({
+    success: true,
+    request: publicAccountRequest(request),
+  });
+});
+
 app.get('/api/auth/me', authenticate, (req, res) => {
   res.json({
     success: true,
@@ -382,6 +467,7 @@ app.get('/api/admin/users', (req, res) => {
       users: store.users.map(publicUser),
       sessions: store.sessions.slice(-100).reverse().map(publicSession),
       loginEvents: store.loginEvents.slice(-100).reverse(),
+      accountRequests: store.accountRequests.slice(-100).reverse().map(publicAccountRequest),
     },
   });
 });
@@ -395,10 +481,10 @@ app.post('/api/admin/users', (req, res) => {
   const normalizedUsername = String(username).trim();
   const normalizedDisplayName = String(displayName || username).trim();
 
-  if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(normalizedUsername)) {
+  if (!validateUsername(normalizedUsername)) {
     return res.status(400).json({
       success: false,
-      error: '账号需为 3-32 位，只能包含字母、数字、下划线、点和短横线',
+      error: '账号需为 3-32 位，只能包含字母和数字',
     });
   }
 
@@ -425,6 +511,82 @@ app.post('/api/admin/users', (req, res) => {
   writeAuthStore(store);
 
   res.status(201).json({ success: true, user: publicUser(user) });
+});
+
+app.post('/api/admin/account-requests/:id/approve', (req, res) => {
+  if (!verifyAdminPassword(req)) {
+    return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
+  }
+
+  const store = readAuthStore();
+  const request = store.accountRequests.find(item => item.id === req.params.id);
+  if (!request) {
+    return res.status(404).json({ success: false, error: '申请记录不存在' });
+  }
+
+  if (request.status !== 'pending') {
+    return res.status(409).json({ success: false, error: '该申请已处理' });
+  }
+
+  if (store.users.some(user => user.username === request.username)) {
+    request.status = 'rejected';
+    request.reviewedAt = nowIso();
+    request.reviewedBy = 'admin';
+    request.reviewNote = '账号名已被占用';
+    writeAuthStore(store);
+    return res.status(409).json({ success: false, error: '账号名已被占用，申请已自动拒绝' });
+  }
+
+  const user = {
+    id: createToken(10),
+    username: request.username,
+    displayName: request.username,
+    organization: request.organization,
+    role: 'user',
+    active: true,
+    passwordHash: request.passwordHash,
+    createdAt: nowIso(),
+    createdBy: 'account_request',
+    accountRequestId: request.id,
+  };
+  store.users.push(user);
+  request.status = 'approved';
+  request.reviewedAt = nowIso();
+  request.reviewedBy = 'admin';
+  request.userId = user.id;
+  writeAuthStore(store);
+
+  res.json({
+    success: true,
+    user: publicUser(user),
+    request: publicAccountRequest(request),
+  });
+});
+
+app.post('/api/admin/account-requests/:id/reject', (req, res) => {
+  if (!verifyAdminPassword(req)) {
+    return res.status(401).json({ success: false, error: '未授权：管理员密码错误' });
+  }
+
+  const store = readAuthStore();
+  const request = store.accountRequests.find(item => item.id === req.params.id);
+  if (!request) {
+    return res.status(404).json({ success: false, error: '申请记录不存在' });
+  }
+
+  if (request.status !== 'pending') {
+    return res.status(409).json({ success: false, error: '该申请已处理' });
+  }
+
+  request.status = 'rejected';
+  request.reviewedAt = nowIso();
+  request.reviewedBy = 'admin';
+  writeAuthStore(store);
+
+  res.json({
+    success: true,
+    request: publicAccountRequest(request),
+  });
 });
 
 // ---- 前端埋点数据接收接口 ----
@@ -514,6 +676,7 @@ app.get('/api/telemetry/stats', (req, res) => {
           users: authStore.users.map(publicUser),
           sessions: authStore.sessions.slice(-100).reverse().map(publicSession),
           loginEvents: authStore.loginEvents.slice(-100).reverse(),
+          accountRequests: authStore.accountRequests.slice(-100).reverse().map(publicAccountRequest),
         },
       }
     });

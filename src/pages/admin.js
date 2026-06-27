@@ -97,7 +97,7 @@ export function renderAdminPage(container) {
         <form id="admin-create-user-form" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:var(--space-3); align-items:end; margin-bottom:var(--space-5);">
           <div class="form-group">
             <label class="form-label" for="admin-new-username">账号</label>
-            <input class="form-input" id="admin-new-username" name="username" autocomplete="off" placeholder="teacher01" required />
+            <input class="form-input" id="admin-new-username" name="username" autocomplete="off" placeholder="teacher01" pattern="[A-Za-z0-9]{3,32}" title="账号需为 3-32 位，只能包含字母和数字" required />
           </div>
           <div class="form-group">
             <label class="form-label" for="admin-new-display-name">显示名</label>
@@ -109,6 +109,26 @@ export function renderAdminPage(container) {
           </div>
           <button class="btn btn--primary" type="submit" id="admin-create-user-btn">创建账号</button>
         </form>
+        <div style="margin-bottom:var(--space-5);">
+          <h3 style="font-size:var(--text-base); margin-bottom:var(--space-3);">账号申请</h3>
+          <div class="table-wrapper">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>申请时间</th>
+                  <th>账号</th>
+                  <th>单位</th>
+                  <th>申请理由</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="admin-account-requests-tbody">
+                <tr><td colspan="6" style="text-align:center; color:var(--color-text-secondary);">正在加载申请...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         <div class="table-wrapper" style="margin-bottom:var(--space-5);">
           <table class="table">
             <thead>
@@ -175,9 +195,48 @@ export function renderAdminPage(container) {
   container.querySelector('#admin-refresh-btn').addEventListener('click', loadAdminData);
   container.querySelector('#admin-logout-btn').addEventListener('click', handleLogout);
   container.querySelector('#admin-create-user-form').addEventListener('submit', handleCreateUser);
+  container.querySelector('#admin-account-requests-tbody').addEventListener('click', handleAccountRequestAction);
 
   // 触发数据加载（会检查或弹出密码验证）
   loadAdminData();
+}
+
+async function handleAccountRequestAction(event) {
+  const button = event.target.closest('[data-request-action]');
+  if (!button) return;
+
+  const pwd = sessionStorage.getItem('admin_password');
+  if (!pwd) {
+    Toast.show('请先完成管理员验证', 'warning');
+    loadAdminData();
+    return;
+  }
+
+  const requestId = button.dataset.requestId;
+  const action = button.dataset.requestAction;
+  const actionText = action === 'approve' ? '批准' : '拒绝';
+  button.disabled = true;
+  button.textContent = `${actionText}中...`;
+
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/admin/account-requests/${requestId}/${action}`.replace(/\/+$/, ''), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-password': pwd,
+      },
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(result.error || `${actionText}失败: ${res.status}`);
+    }
+    Toast.show(action === 'approve' ? '申请已批准，账号已创建' : '申请已拒绝', 'success');
+    loadAdminData();
+  } catch (err) {
+    Toast.show(err.message, 'error');
+    button.disabled = false;
+    button.textContent = actionText;
+  }
 }
 
 async function handleCreateUser(event) {
@@ -402,6 +461,36 @@ function renderStats(data) {
 function renderAuthStats(auth) {
   const usersTbody = document.querySelector('#admin-users-tbody');
   const loginsTbody = document.querySelector('#admin-logins-tbody');
+  const requestsTbody = document.querySelector('#admin-account-requests-tbody');
+
+  if (requestsTbody) {
+    const requests = auth.accountRequests || [];
+    requestsTbody.innerHTML = requests.length
+      ? requests.map(request => {
+          const status = request.status || 'pending';
+          const statusText = status === 'approved' ? '已批准' : status === 'rejected' ? '已拒绝' : '待审核';
+          const statusClass = status === 'approved' ? 'badge--success' : status === 'rejected' ? 'badge--danger' : 'badge--warning';
+          const actions = status === 'pending'
+            ? `
+              <div style="display:flex; gap:var(--space-2);">
+                <button class="btn btn--primary btn--sm" type="button" data-request-action="approve" data-request-id="${escapeHtml(request.id)}">批准</button>
+                <button class="btn btn--secondary btn--sm" type="button" data-request-action="reject" data-request-id="${escapeHtml(request.id)}">拒绝</button>
+              </div>
+            `
+            : `<span style="color:var(--color-text-muted);">${formatTime(request.reviewedAt)}</span>`;
+          return `
+            <tr>
+              <td>${formatTime(request.createdAt)}</td>
+              <td><strong>${escapeHtml(request.username)}</strong></td>
+              <td>${escapeHtml(request.organization || '-')}</td>
+              <td title="${escapeHtml(request.reason || '')}" style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(request.reason || '-')}</td>
+              <td><span class="badge ${statusClass}">${statusText}</span></td>
+              <td>${actions}</td>
+            </tr>
+          `;
+        }).join('')
+      : '<tr><td colspan="6" style="text-align:center; color:var(--color-text-secondary);">暂无账号申请</td></tr>';
+  }
 
   if (usersTbody) {
     const users = auth.users || [];

@@ -73,6 +73,21 @@ export async function login(username, password) {
   return data.user;
 }
 
+export async function applyAccount({ username, password, organization, reason }) {
+  const res = await fetch(`${AUTH_BASE}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, organization, reason }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `申请提交失败: ${res.status}`);
+  }
+
+  return data.request;
+}
+
 export async function logout() {
   try {
     await fetchWithAuth(`${AUTH_BASE}/logout`, { method: 'POST' });
